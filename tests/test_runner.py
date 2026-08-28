@@ -168,13 +168,14 @@ class TestReport:
         """
         case = tmp_path / "c.py"
         case.write_text("print('ok')")
-        rc = main([str(tmp_path), "--against", "cpython", "--oracle-python", sys.executable, "-q"])
+        argv = ["run", str(tmp_path), "--against", "cpython"]
+        rc = main([*argv, "--oracle-python", sys.executable, "-q"])
         assert rc == 0
 
     def test_a_missing_oracle_python_is_an_error_not_a_pass(self, tmp_path):
         (tmp_path / "c.py").write_text("print('ok')")
         with pytest.raises(SystemExit) as e:
-            main([str(tmp_path), "--oracle-python", "/nonexistent/python-xyz"])
+            main(["run", str(tmp_path), "--oracle-python", "/nonexistent/python-xyz"])
         assert e.value.code != 0
 
     def test_a_mismatch_says_what_actually_differed(self, tmp_path):
@@ -221,7 +222,7 @@ class TestReport:
             "p.write_text(p.read_text() + 'x' if p.exists() else 'x')\n"
             "print(len(p.read_text()))\n"
         )
-        argv = [str(tmp_path), "--against", "cpython", "-q", "--tolerate-mismatch"]
+        argv = ["run", str(tmp_path), "--against", "cpython", "-q", "--tolerate-mismatch"]
         assert main(argv) == 0
         assert main(argv[:-1]) == 1
 
@@ -233,7 +234,7 @@ class TestReport:
         done once.
         """
         (tmp_path / "c.py").write_text("raise SystemExit(1)")
-        rc = main([str(tmp_path), "--against", "cpython", "-q", "--tolerate-mismatch"])
+        rc = main(["run", str(tmp_path), "--against", "cpython", "-q", "--tolerate-mismatch"])
         assert rc == 1
 
     def test_an_oracle_that_cannot_run_the_case_is_not_a_match(self, tmp_path):

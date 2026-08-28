@@ -46,10 +46,11 @@ packages = ["src/kohebi_compat"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-# suites/ is test data, not library code. Its exact source shape is deliberate,
-# since several cases exist precisely to probe formatting-adjacent behaviour,
-# so neither the linter nor the formatter should touch it.
-extend-exclude = ["suites"]
+# suites/ and corpus/ are test data, not library code. Their exact source shape
+# is deliberate, since several cases exist precisely to probe
+# formatting-adjacent behaviour and several others are not valid Python at all,
+# so neither the linter nor the formatter should touch them.
+extend-exclude = ["suites", "corpus"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "PT", "SIM", "RUF"]
