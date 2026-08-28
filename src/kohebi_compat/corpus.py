@@ -1,11 +1,12 @@
 """What a comparison over a corpus of files is made of.
 
-Two differentials share this: `tokens` compares against CPython's `tokenize`
-module and `trees` compares against `ast.dump`. What they have in common is
-everything except the comparison itself. The same set of outcomes, the same
-notion of a file we chose not to look at and why, the same second oracle when
-the first one refuses a file, and the same way of finding the corpus and the
-binary to run over it.
+Three differentials share this: `tokens` compares against CPython's `tokenize`
+module, `trees` compares against `ast.dump`, and `errors` compares against the
+block `traceback` prints for a file neither side reads. What they have in
+common is everything except the comparison itself. The same set of outcomes,
+the same notion of a file we chose not to look at and why, the same second
+oracle when the first one refuses a file, and the same way of finding the
+corpus and the binary to run over it.
 
 Keeping that in one place is not only about repetition. An outcome that means
 one thing in one differential and something slightly different in the other is

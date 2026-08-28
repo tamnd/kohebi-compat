@@ -1,0 +1,1 @@
+x = '\N{KEYCAP DIGIT ZERO}'

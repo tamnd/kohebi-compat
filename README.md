@@ -22,11 +22,11 @@ kohebi build        AOT mode
 
 Two-way disagreements are informative in themselves. CPython and `kohebi run` agreeing while `kohebi build` differs means the AOT compiler is wrong. Both kohebi modes agreeing against CPython means the shared frontend is wrong. That distinction saves a lot of debugging, and it is the mechanism that enforces the claim that the two modes do not drift apart.
 
-## Three commands
+## Four commands
 
-`kohebi-compat run` is the end goal. `kohebi-compat tokens` and `kohebi-compat trees` are what is useful today.
+`kohebi-compat run` is the end goal. `kohebi-compat tokens`, `kohebi-compat trees` and `kohebi-compat errors` are what is useful today.
 
-Running whole programs only says something once there is a runtime to run them. There will not be one for a while, and waiting until then means finding out about a frontend bug months after writing it. So the frontend gets compared a stage at a time, against the piece of CPython that does the same job: the lexer against the `tokenize` module, and the parser against `ast.dump`.
+Running whole programs only says something once there is a runtime to run them. There will not be one for a while, and waiting until then means finding out about a frontend bug months after writing it. So the frontend gets compared a stage at a time, against the piece of CPython that does the same job: the lexer against the `tokenize` module, the parser against `ast.dump`, and the refusals against the block `traceback` prints.
 
 ```console
 $ pip install -e '.[dev]'
@@ -39,9 +39,10 @@ $ kohebi-compat run suites --out results/local
 $ kohebi-compat tokens --kohebi ../kohebi/target/release/kohebi
 $ kohebi-compat trees --kohebi ../kohebi/target/release/kohebi
 $ kohebi-compat trees corpus/local --kohebi ../kohebi/target/release/kohebi
+$ kohebi-compat errors --kohebi ../kohebi/target/release/kohebi
 ```
 
-The two frontend commands take the same arguments and report in the same shape, because they are the same comparison asked of a different stage. Everything below about oracles, outcomes, exclusions and corpora applies to both.
+The three frontend commands take the same arguments and report in the same shape, because they are the same comparison asked of a different stage. Everything below about oracles, outcomes, exclusions and corpora applies to all of them. Only the corpus they fall back on differs: `tokens` and `trees` default to the oracle's standard library and `errors` defaults to `corpus/broken`, for the reason in the next section.
 
 `trees` needs a 3.13 or newer oracle and `tokens` runs on anything. `ast.dump` grew a `show_empty` argument in 3.13 and it defaults to false, so from 3.13 an optional empty list is left out of the dump and before 3.13 it is printed. That is a change to the printer rather than to the tree, kohebi implements the 3.13 one, and running against 3.12 anyway would report a couple of thousand mismatches that all say `keywords=[]`. So it refuses and says why instead.
 
@@ -87,6 +88,16 @@ Files go to both sides as bytes rather than as text, because what encoding a fil
 Where this stands as of 29 August 2026, against CPython 3.14.7's own standard library, which is 2273 files with the test suite in it: every file tokenizes identically and every file parses to an identical tree, attributes included. Nothing is refused and nothing is wrong, so both comparisons now run with a floor of 100% on 3.14 and a run that drops below it fails. The last two gaps were the `\N{...}` escape, which needed a Unicode name table, and a lone surrogate in a literal, which needed a string representation that holds a code point rather than a character. Neither had ever shown up in the token comparison, because a tokenizer only has to hand back the text of a literal and a parser has to say what value it is.
 
 3.13 and 3.12 have no floor and are not held to the same standard, because their standard libraries are different files and `ast.dump` prints a string with `repr`, which escapes whatever the interpreter's own Unicode database says is unprintable. Three files differ for that reason alone and are excluded below 3.14, each with the code point named in `corpus/exclusions.txt`.
+
+## Comparing a refusal
+
+`kohebi-compat errors` is the third differential and the odd one out. The other two compare a file both sides read. This one compares a file neither side reads, and no standard library can exercise it, because every file in one parses. So it has a corpus of its own, `corpus/broken/`, which is one small file per way of being refused: every escape family at every length that fails differently, the same escapes inside an f-string and a t-string and across a triple quoted literal, a coding cookie naming nothing, a byte no codec has a character for, a byte order mark contradicting the cookie, a null byte, and the tokenizer's own refusals for unterminated literals and prefixes that are not prefixes.
+
+What is compared is the whole block a person sees: the `File` line, the source line, the carets under it and the exception line, exactly as `traceback.format_exception_only` prints it. That is a choice worth stating. Comparing the block rather than comparing the class, the message, the line and both columns as five fields is not a shortcut, it is the same five things in the form somebody reads them, with nothing to keep in step by hand. It also catches a shape difference that the fields would hide: a `SyntaxError` in CPython can be missing its filename, its line or its column, and the traceback module prints as far down that list as it can get, so a refusal comes out as four lines, or three, or two, or one. A null byte prints one. An unknown encoding prints two.
+
+Nothing is stored as an expected answer. CPython is asked at the time the comparison runs, so adding a case is adding a file to `corpus/broken/`, and a message CPython rewords in a future release shows up as a difference rather than as a fixture nobody updated. Both sides are given the same filename, the path as written on the command line, because the filename is the first line of the block and a comparison that had to paper over it would be papering over the beginning.
+
+In CI this runs on 3.14 only, and unlike the other two steps that is not because the corpus differs. It is the same corpus on every version. This compares wording character for character, kohebi reproduces one release's wording, and CPython rewords its own errors between releases, so running it against 3.13 would measure that release's notes rather than anything here.
 
 ## What is normalised, and what is not
 
