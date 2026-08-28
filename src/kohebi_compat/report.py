@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .runner import Outcome, Result
+from .tokens import TokenOutcome, TokenResult
 
 
 @dataclass(slots=True)
@@ -104,3 +105,87 @@ def write(summary: Summary, results: list[Result], out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.json").write_text(summary.to_json())
     (out / "report.md").write_text(to_markdown(summary, results))
+
+
+@dataclass(slots=True)
+class TokenSummary:
+    total: int
+    by_outcome: dict[str, int]
+    agreement: float
+    """Files whose token stream or error matched, over files we actually
+    compared. Excluded and unreadable files are not in either half, because
+    counting a file we skipped as a file we got right is how a number stops
+    being true."""
+    generated_at: str
+    host: dict[str, str]
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), indent=2, sort_keys=True) + "\n"
+
+
+def summarise_tokens(results: list[TokenResult]) -> TokenSummary:
+    outcomes = Counter(r.outcome.value for r in results)
+    compared = [
+        r for r in results if r.outcome not in (TokenOutcome.EXCLUDED, TokenOutcome.UNREADABLE)
+    ]
+    # UNSUPPORTED counts against agreement. It is an honest gap rather than a
+    # wrong answer, but it is still a file we cannot tokenize, and the number
+    # this repo exists to publish is how much of Python works.
+    agreed = sum(1 for r in compared if r.outcome is TokenOutcome.MATCH)
+
+    return TokenSummary(
+        total=len(results),
+        by_outcome=dict(sorted(outcomes.items())),
+        agreement=round(agreed / len(compared), 4) if compared else 0.0,
+        generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        host={
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "python": sys.version.split()[0],
+        },
+    )
+
+
+def tokens_to_markdown(
+    summary: TokenSummary, results: list[TokenResult], *, limit: int = 50
+) -> str:
+    lines = [
+        "# Tokenizer agreement",
+        "",
+        f"Generated {summary.generated_at} on {summary.host['platform']}",
+        f"against CPython {summary.host['python']}.",
+        "",
+        f"**Agreement: {summary.agreement:.2%}** over {summary.total} files.",
+        "",
+        "| Outcome | Files |",
+        "| --- | ---: |",
+    ]
+    lines.extend(f"| {k} | {v} |" for k, v in summary.by_outcome.items())
+
+    interesting = [
+        r
+        for r in results
+        if r.outcome not in (TokenOutcome.MATCH, TokenOutcome.EXCLUDED, TokenOutcome.UNREADABLE)
+    ]
+    if interesting:
+        lines += [
+            "",
+            "## Where we differ",
+            "",
+            "| File | Outcome | First difference |",
+            "| --- | --- | --- |",
+        ]
+        for r in interesting[:limit]:
+            detail = r.detail.replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| `{r.path.name}` | {r.outcome.value} | {detail} |")
+        if len(interesting) > limit:
+            lines.append("")
+            lines.append(f"...and {len(interesting) - limit} more.")
+
+    return "\n".join(lines) + "\n"
+
+
+def write_tokens(summary: TokenSummary, results: list[TokenResult], out: Path) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "tokens.json").write_text(summary.to_json())
+    (out / "tokens.md").write_text(tokens_to_markdown(summary, results))

@@ -66,7 +66,62 @@ jobs:
         with:
           python-version: "3.14"
       - run: python -m pip install -e .
-      - run: kohebi-compat suites --against cpython
+      - run: kohebi-compat run suites --against cpython
+
+  # The lexer can be checked long before anything can be run, by comparing its
+  # token stream against CPython's tokenize module over the standard library of
+  # the runner. A few thousand files of real Python, none of which anyone here
+  # wrote, and it has already found three bugs that the hand written suite did
+  # not. Building kohebi is the slow part, so this job is the only one that
+  # needs a Rust toolchain.
+  tokens:
+    name: Tokenizer agreement, Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: tamnd/kohebi
+          path: .kohebi
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: .kohebi
+      - run: cargo build --release --locked --bin kohebi
+        working-directory: .kohebi
+      - run: python -m pip install -e .
+      - name: Hand written corpus
+        # Small, deliberate, and every file has to match. Real code does not
+        # use tabs for indentation or put a form feed in a class body, so a
+        # corpus of real code exercises the easy half of a tokenizer only.
+        run: >
+          kohebi-compat tokens corpus/local
+          --kohebi .kohebi/target/release/kohebi
+      - name: The standard library of CPython ${{ matrix.python }}
+        # No floor on agreement here. Agreement counts files we cannot
+        # tokenize at all against us, f-strings are most of the standard
+        # library, and a floor would have to be moved by hand on every change.
+        # What this fails on is a wrong answer, which is the thing that matters.
+        run: >
+          kohebi-compat tokens
+          --kohebi .kohebi/target/release/kohebi
+          --out results/tokens-${{ matrix.python }}
+          --quiet
+      - name: Summarise
+        if: always()
+        run: cat results/tokens-${{ matrix.python }}/tokens.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: tokens-${{ matrix.python }}
+          path: results/tokens-${{ matrix.python }}
+          if-no-files-found: warn
 
   # PyPy and GraalPy disagree with CPython on purpose, so this job passes
   # --tolerate-mismatch and records the rate instead of failing on it. What it
@@ -115,7 +170,7 @@ jobs:
         # `python3` here is the alternative runtime, and the suite would
         # quietly be comparing PyPy against itself.
         run: >
-          ${{ steps.oracle.outputs.python-path }} -m kohebi_compat suites
+          ${{ steps.oracle.outputs.python-path }} -m kohebi_compat run suites
           --against ${{ matrix.runtime }}
           --oracle-python ${{ steps.oracle.outputs.python-path }}
           --tolerate-mismatch
@@ -132,7 +187,7 @@ jobs:
   compat-ok:
     name: Compatibility
     if: always()
-    needs: [lint, harness, self-consistency]
+    needs: [lint, harness, self-consistency, tokens]
     runs-on: ubuntu-24.04
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

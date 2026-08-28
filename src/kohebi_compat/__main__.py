@@ -1,4 +1,14 @@
-"""`kohebi-compat` command line entry point."""
+"""`kohebi-compat` command line entry point.
+
+Two subcommands, because a runtime that cannot run a program yet still has
+parts worth checking:
+
+    kohebi-compat run      whole programs, compared by what they print
+    kohebi-compat tokens   token streams, compared against CPython's tokenizer
+
+`run` is the end goal. `tokens` is what tells us today whether the frontend is
+right, over a corpus far larger than anything we would write by hand.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +29,8 @@ from .runner import (
     collect,
     compare,
 )
+from .tokens import Exclusions, TokenOutcome, default_corpus, find_kohebi
+from .tokens import run as run_tokens
 
 _INTERPRETERS = {i.name: i for i in (CPYTHON, KOHEBI_RUN, KOHEBI_BUILD, PYPY, GRAALPY)}
 
@@ -26,8 +38,18 @@ _INTERPRETERS = {i.name: i for i in (CPYTHON, KOHEBI_RUN, KOHEBI_BUILD, PYPY, GR
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="kohebi-compat",
-        description="Run the differential compatibility suite against CPython.",
+        description="Compare kohebi against CPython.",
     )
+    sub = parser.add_subparsers(dest="command", required=True)
+    _add_run(sub.add_parser("run", help="Run whole programs and compare their output."))
+    _add_tokens(sub.add_parser("tokens", help="Compare token streams against CPython."))
+    args = parser.parse_args(argv)
+    if args.command == "tokens":
+        return _tokens(args, parser)
+    return _run(args, parser)
+
+
+def _add_run(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "suite",
         type=Path,
@@ -81,8 +103,9 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--quiet", "-q", action="store_true")
-    args = parser.parse_args(argv)
 
+
+def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if not args.suite.is_dir():
         parser.error(f"{args.suite} is not a directory")
 
@@ -139,6 +162,134 @@ def main(argv: list[str] | None = None) -> int:
     if args.tolerate_mismatch:
         return 0
     return 0 if all(r.passed for r in results) else 1
+
+
+def _add_tokens(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "corpus",
+        type=Path,
+        nargs="*",
+        default=None,
+        help=(
+            "Directories or files to tokenize. Defaults to the standard "
+            "library of the oracle interpreter, which is a few thousand files "
+            "of real Python that are already on the machine."
+        ),
+    )
+    parser.add_argument(
+        "--kohebi",
+        default=None,
+        metavar="PATH",
+        help="The kohebi binary. Defaults to whatever is on PATH.",
+    )
+    parser.add_argument(
+        "--oracle-python",
+        default=None,
+        metavar="PATH",
+        help="Interpreter whose standard library becomes the default corpus.",
+    )
+    parser.add_argument(
+        "--exclusions",
+        type=Path,
+        default=Path("corpus/exclusions.txt"),
+        metavar="FILE",
+        help="Rules for files not to compare, each with a reason.",
+    )
+    parser.add_argument("--jobs", "-j", type=int, default=8, metavar="N")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Compare only the first N files. For a quick check.",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Write tokens.json and tokens.md here.",
+    )
+    parser.add_argument(
+        "--min-agreement",
+        type=float,
+        default=None,
+        metavar="RATIO",
+        help=(
+            "Also fail if agreement falls below this, on top of failing on "
+            "any wrong answer. Use it to stop coverage sliding backwards "
+            "while parts of the language are still unimplemented."
+        ),
+    )
+    parser.add_argument("--quiet", "-q", action="store_true")
+
+
+def _tokens(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    kohebi = find_kohebi(args.kohebi)
+    if kohebi is None:
+        parser.error(
+            "cannot find the kohebi binary. Build it with `cargo build` in the "
+            "kohebi checkout and pass --kohebi target/debug/kohebi."
+        )
+
+    roots = args.corpus or [default_corpus(args.oracle_python)]
+    paths = _gather(roots)
+    if not paths:
+        print(f"No .py files under {', '.join(str(r) for r in roots)}.", file=sys.stderr)
+        return 1
+    if args.limit is not None:
+        paths = paths[: args.limit]
+
+    try:
+        exclusions = Exclusions.load(args.exclusions)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    print(f"corpus: {len(paths)} files from {', '.join(str(r) for r in roots)}", file=sys.stderr)
+
+    results = []
+    for result in run_tokens(paths, kohebi=kohebi, exclusions=exclusions, jobs=args.jobs):
+        results.append(result)
+        if not args.quiet and result.outcome not in (
+            TokenOutcome.MATCH,
+            TokenOutcome.EXCLUDED,
+            TokenOutcome.UNREADABLE,
+        ):
+            print(f"{result.outcome.value:14} {result.path}: {result.detail}", file=sys.stderr)
+
+    summary = report.summarise_tokens(results)
+    print(report.tokens_to_markdown(summary, results))
+
+    if args.out:
+        report.write_tokens(summary, results, args.out)
+        print(f"wrote {args.out}/tokens.md", file=sys.stderr)
+
+    # Two separate failures. A wrong answer is always a bug and always fails.
+    # A gap kohebi admits to is not a bug, it is coverage, and it fails only
+    # against a floor someone chose, because otherwise "we do not implement
+    # f-strings yet" would keep the build red for weeks and teach everyone to
+    # ignore it.
+    wrong = [r for r in results if not r.passed]
+    if wrong:
+        print(f"{len(wrong)} file(s) tokenized differently from CPython", file=sys.stderr)
+        return 1
+    if args.min_agreement is not None and summary.agreement < args.min_agreement:
+        print(
+            f"agreement {summary.agreement:.2%} is below the floor of {args.min_agreement:.2%}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _gather(roots: list[Path]) -> list[Path]:
+    found: list[Path] = []
+    for root in roots:
+        if root.is_dir():
+            found.extend(root.rglob("*.py"))
+        elif root.exists():
+            found.append(root)
+    return sorted(set(found))
 
 
 if __name__ == "__main__":

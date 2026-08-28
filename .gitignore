@@ -4,7 +4,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-/results/local/
 *.egg-info/
 dist/
 .DS_Store
+# Raw result files are not the record. The markdown summary next to them is,
+# and it is the thing worth reading in a diff.
+/results/**/*.json

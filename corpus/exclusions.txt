@@ -1,0 +1,5 @@
+# Files the tokenizer comparison does not look at, and why.
+#
+# One rule per line, "<glob>: <reason>". The reason is required. An exclusion
+# saying "we do not support this yet" is fine and an exclusion with no reason
+# is how a compatibility number stops meaning anything.

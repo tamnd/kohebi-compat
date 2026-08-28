@@ -1,0 +1,7 @@
+a = "d"
+b = r"x"
+c = b"raw"
+d = rb"raw"
+e = BR"raw"
+g = u"legacy"
+h = R"raw"
