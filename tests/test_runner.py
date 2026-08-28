@@ -185,3 +185,30 @@ class TestReport:
         assert "stdout" in detail
         assert "hello" in detail
         assert "goodbye" in detail
+
+    def test_a_case_runs_even_though_cwd_is_a_scratch_directory(self, tmp_path):
+        """The bug that made every case fail to launch.
+
+        compare() runs each case in a fresh temp directory so a case can write
+        files without touching the repo. The script path has to survive that.
+        """
+        case = tmp_path / "c.py"
+        case.write_text("print('ran')")
+        result = compare(case, oracle=CPYTHON, against=[])
+        assert result.outcome is Outcome.MATCH
+        assert result.oracle is not None
+        assert result.oracle.stdout == b"ran\n"
+
+    def test_an_oracle_that_cannot_run_the_case_is_not_a_match(self, tmp_path):
+        """The guard that would have caught the launch bug on the first run.
+
+        With no correct answer to compare against, the only honest outcome is
+        that the oracle failed. Reporting a match here is how a suite goes
+        green while running nothing at all.
+        """
+        case = tmp_path / "c.py"
+        case.write_text("this is not python(")
+        result = compare(case, oracle=CPYTHON, against=[])
+        assert result.outcome is Outcome.ORACLE_FAILED
+        assert not result.passed
+        assert "exited" in result.note

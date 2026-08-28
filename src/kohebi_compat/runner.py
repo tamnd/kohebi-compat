@@ -142,10 +142,15 @@ def execute(
 ) -> Execution:
     """Run one program under one interpreter, capturing everything."""
     full_env = {**os.environ, "PYTHONHASHSEED": "0", **(env or {})}
+    # Absolute, because cwd is a scratch directory the case can write into and
+    # a relative path would be resolved against that instead. When this was
+    # relative, no case ever ran: every interpreter reported "can't open file"
+    # and the suite compared those failures to each other and called it a match.
+    target = str(script.resolve())
     started = time.perf_counter()
     try:
         proc = subprocess.run(
-            [*interpreter.argv, str(script)],
+            [*interpreter.argv, target],
             capture_output=True,
             timeout=timeout_s,
             cwd=cwd,
@@ -190,6 +195,21 @@ def compare(
 
         if oracle_run.timed_out:
             return Result(name, Outcome.TIMEOUT, oracle=oracle_run, note="oracle timed out")
+
+        # A case is expected to run to completion under the oracle. If it does
+        # not, there is no correct answer to compare anything against, and
+        # calling that a match is how a suite reports green while running
+        # nothing. That is not hypothetical: it is what this suite did until
+        # the script path was made absolute.
+        if oracle_run.returncode != 0:
+            err = oracle_run.stderr.decode("utf-8", "replace").strip().splitlines()
+            why = err[-1] if err else "no stderr"
+            return Result(
+                name,
+                Outcome.ORACLE_FAILED,
+                oracle=oracle_run,
+                note=f"oracle exited {oracle_run.returncode}: {why}",
+            )
 
         result = Result(name, Outcome.MATCH, oracle=oracle_run)
         expected = oracle_run.key(how)
