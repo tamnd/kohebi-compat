@@ -13,3 +13,7 @@
 badsyntax_pep3120.py [python<3.14]: this file has no encoding declaration and is not UTF-8, and before 3.14 CPython reported that as the string literal failing to decode rather than as the file having no declaration. kohebi reproduces 3.14. The 3.14 job still compares it, and crates/kohebi-parse/tests/source.rs pins the same bytes on the Rust side.
 
 uts46data.py [python<3.14]: this file contains U+1C8A, which became printable in Unicode 16.0. `ast.dump` prints a string with `repr`, `repr` escapes whatever is not printable, and which characters those are comes from whichever Unicode database the interpreter was built with. 3.14 ships 16.0 and escapes nothing here, 3.13 ships 15.1 and writes \\u1c8a. kohebi reproduces 3.14, so the 3.14 job still compares it.
+
+unistring.py [python<3.14]: this file contains U+1B4F and U+1C89, both of which were unassigned until Unicode 16.0 and are printable in it. Same reason as uts46data.py above: `ast.dump` prints a string with `repr` and what `repr` escapes comes from the interpreter's own Unicode database. kohebi reproduces 3.14, so the 3.14 job still compares it. It only started showing up once lone surrogates parsed, since before that the file was refused for a different reason.
+
+test_str.py [python<3.14]: this file contains U+14000, EGYPTIAN HIEROGLYPH-14000, which Unicode 16.0 assigned and 15.1 did not. Same `repr` reason as the two above, and it appeared for the same reason: the file used to be refused over a lone surrogate.

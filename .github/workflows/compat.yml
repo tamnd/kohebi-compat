@@ -117,14 +117,16 @@ jobs:
           kohebi-compat trees corpus/local
           --kohebi .kohebi/target/release/kohebi
       - name: Tokens, standard library of CPython ${{ matrix.python }}
-        # No floor on agreement here. Agreement counts files we cannot handle
-        # at all against us, a floor would have to be moved by hand on every
-        # change, and what this fails on is a wrong answer, which is the thing
-        # that matters.
+        # The floor is 100% on 3.14, which is the version kohebi reproduces,
+        # because the frontend reads every file in that standard library and
+        # anything less is a regression rather than a gap. The older versions
+        # have no floor: their corpora are different files and a difference
+        # there can be a fact about CPython rather than a bug here.
         run: >
           kohebi-compat tokens
           --kohebi .kohebi/target/release/kohebi
           --out results/tokens-${{ matrix.python }}
+          ${{ matrix.python == '3.14' && '--min-agreement 1.0' || '' }}
           --quiet
       - name: Trees, standard library of CPython ${{ matrix.python }}
         # Runs even when the tokens step failed. The two stages fail for
@@ -134,6 +136,7 @@ jobs:
           kohebi-compat trees
           --kohebi .kohebi/target/release/kohebi
           --out results/trees-${{ matrix.python }}
+          ${{ matrix.python == '3.14' && '--min-agreement 1.0' || '' }}
           --quiet
       - name: Summarise
         if: always()
