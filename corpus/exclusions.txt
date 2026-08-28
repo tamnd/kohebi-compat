@@ -3,3 +3,11 @@
 # One rule per line, "<glob>: <reason>". The reason is required. An exclusion
 # saying "we do not support this yet" is fine and an exclusion with no reason
 # is how a compatibility number stops meaning anything.
+#
+# A rule may be held to a range of versions, written "<glob> [python<3.14]".
+# Python changes its own error messages between releases and kohebi reproduces
+# one release, so a file that matches on 3.14 and not on 3.13 is a fact about
+# CPython. Without the guard the choice would be to drop the file on every
+# version or to compare against one version only, and both are worse.
+
+badsyntax_pep3120.py [python<3.14]: this file has no encoding declaration and is not UTF-8, and before 3.14 CPython reported that as the string literal failing to decode rather than as the file having no declaration. kohebi reproduces 3.14. The 3.14 job still compares it, and crates/kohebi-parse/tests/source.rs pins the same bytes on the Rust side.

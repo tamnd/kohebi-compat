@@ -65,6 +65,8 @@ Every file lands in one of these, and only some of them are failures:
 | `excluded` | Named in `corpus/exclusions.txt`, with a reason | |
 | `unreadable` | Gone from disk between the listing and the read | |
 
+A rule in `corpus/exclusions.txt` may carry a version guard, written `<glob> [python<3.14]`, and then it only applies when the oracle is that old. Python changes its own error messages between releases and kohebi reproduces one release, so a file that matches on 3.14 and not on 3.13 is a fact about CPython rather than about kohebi. Without the guard the choice would be to drop the file on every version or to compare against one version only, and both of those are worse.
+
 A wrong answer always fails. A gap kohebi admits to does not, because "f-strings are not implemented yet" would otherwise keep the build red for weeks and teach everyone to ignore it. It still counts against the agreement percentage, which is the number that says how much of Python works, and `--min-agreement` puts a floor under that number when there is one worth defending.
 
 Files go to both sides as bytes rather than as text, because what encoding a file is in is something the file itself says, on its first or second line, and reaching the same answer about that is the first thing either tokenizer has to get right. A file that is not UTF-8 and does not say so is not skipped: CPython refuses it, so there is a message to agree about. The three such files in CPython's own library are two that declare an encoding and one that exists to be refused.

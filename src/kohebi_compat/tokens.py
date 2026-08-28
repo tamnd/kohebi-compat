@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
 import sysconfig
 import tokenize
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
@@ -43,6 +44,9 @@ from pathlib import Path
 
 Tok = tuple[str, tuple[int, int], tuple[int, int], str]
 """One token as `(type, start, end, text)`, in `tokenize` module terms."""
+
+Guard = Callable[[tuple[int, ...]], bool]
+"""Whether an exclusion applies, given the version of the oracle."""
 
 
 class TokenOutcome(StrEnum):
@@ -313,35 +317,75 @@ class Exclusions:
     Format is one rule per line, `<glob>: <reason>`, matched against the path
     as written. Blank lines and lines starting with `#` are ignored.
 
+    A rule may carry a version guard, written `<glob> [python<3.14]: <reason>`,
+    and then it only applies when the oracle is that old. Python changes its own
+    error messages between releases, and kohebi reproduces one release, so a
+    file that matches on 3.14 and not on 3.13 is a fact about CPython rather
+    than about kohebi. Without the guard the choice would be to drop the file
+    everywhere or to compare against only one version, and both of those are
+    worse. `<` and `>=` are the two comparisons, which is enough to say "before
+    this release" and "from this release on".
+
     The reason is not decoration. An exclusion saying "we do not support this
     yet" is fine and an exclusion with no reason is how a compatibility number
     stops meaning anything, so the parser refuses a rule without one.
     """
 
-    def __init__(self, rules: Sequence[tuple[str, str]] = ()) -> None:
-        self.rules = list(rules)
+    def __init__(
+        self,
+        rules: Sequence[tuple[str, str]] = (),
+        *,
+        version: tuple[int, ...] | None = None,
+    ) -> None:
+        self.rules: list[tuple[str, str, Guard | None]] = [
+            (glob, reason, None) for glob, reason in rules
+        ]
+        self.version = version or sys.version_info[:2]
 
     @classmethod
-    def load(cls, path: Path | None) -> Exclusions:
+    def load(cls, path: Path | None, *, version: tuple[int, ...] | None = None) -> Exclusions:
+        loaded = cls(version=version)
         if path is None or not path.exists():
-            return cls()
-        rules = []
+            return loaded
         for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            glob, sep, reason = line.partition(":")
+            head, sep, reason = line.partition(":")
             if not sep or not reason.strip():
                 raise ValueError(f"{path}:{number}: exclusion has no reason: {line!r}")
-            rules.append((glob.strip(), reason.strip()))
-        return cls(rules)
+            try:
+                glob, guard = _split_guard(head.strip())
+            except ValueError as exc:
+                raise ValueError(f"{path}:{number}: {exc}") from exc
+            loaded.rules.append((glob, reason.strip(), guard))
+        return loaded
 
     def reason_for(self, path: Path) -> str | None:
         text = path.as_posix()
-        for glob, reason in self.rules:
-            if fnmatch(text, glob) or fnmatch(path.name, glob):
-                return reason
+        for glob, reason, guard in self.rules:
+            if not (fnmatch(text, glob) or fnmatch(path.name, glob)):
+                continue
+            if guard is not None and not guard(self.version):
+                continue
+            return reason
         return None
+
+
+_GUARD = re.compile(r"^(?P<glob>.*?)\s*\[python\s*(?P<op><|>=)\s*(?P<version>\d+(?:\.\d+)*)\]$")
+
+
+def _split_guard(head: str) -> tuple[str, Guard | None]:
+    """Pull an optional `[python<3.14]` off the end of a rule's glob."""
+    if not head.endswith("]"):
+        return head, None
+    found = _GUARD.match(head)
+    if found is None:
+        raise ValueError(f"exclusion has a guard it cannot read: {head!r}")
+    wanted = tuple(int(part) for part in found["version"].split("."))
+    if found["op"] == "<":
+        return found["glob"], lambda running: running < wanted
+    return found["glob"], lambda running: running >= wanted
 
 
 def default_corpus(python: str | None = None) -> Path:

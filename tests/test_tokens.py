@@ -187,7 +187,29 @@ class TestExclusions:
     def test_comments_and_blank_lines_are_skipped(self, tmp_path: Path):
         path = tmp_path / "exclusions.txt"
         path.write_text("# a note\n\n*/broken.py: it is broken\n")
-        assert Exclusions.load(path).rules == [("*/broken.py", "it is broken")]
+        assert [(glob, reason) for glob, reason, _ in Exclusions.load(path).rules] == [
+            ("*/broken.py", "it is broken")
+        ]
+
+    def test_a_guard_holds_the_rule_to_one_range_of_versions(self, tmp_path: Path):
+        path = tmp_path / "exclusions.txt"
+        path.write_text("broken.py [python<3.14]: the message changed in 3.14\n")
+        older = Exclusions.load(path, version=(3, 13))
+        assert older.reason_for(Path("broken.py")) == "the message changed in 3.14"
+        newer = Exclusions.load(path, version=(3, 14))
+        assert newer.reason_for(Path("broken.py")) is None
+
+    def test_a_guard_reads_the_other_way_round_too(self, tmp_path: Path):
+        path = tmp_path / "exclusions.txt"
+        path.write_text("broken.py [python>=3.15]: t-strings are not implemented\n")
+        assert Exclusions.load(path, version=(3, 15)).reason_for(Path("broken.py")) is not None
+        assert Exclusions.load(path, version=(3, 14)).reason_for(Path("broken.py")) is None
+
+    def test_a_guard_nobody_can_read_is_an_error(self, tmp_path: Path):
+        path = tmp_path / "exclusions.txt"
+        path.write_text("broken.py [python is old]: because\n")
+        with pytest.raises(ValueError, match="guard it cannot read"):
+            Exclusions.load(path)
 
     def test_a_matching_path_gets_its_reason_back(self):
         rules = Exclusions([("*/tokenizedata/*", "deliberately malformed test data")])
@@ -200,6 +222,11 @@ class TestExclusions:
 
     def test_a_missing_file_excludes_nothing(self, tmp_path: Path):
         assert Exclusions.load(tmp_path / "nope.txt").rules == []
+
+    def test_the_repository_rules_are_checked_against_the_running_version(self):
+        root = Path(__file__).resolve().parent.parent
+        rules = Exclusions.load(root / "corpus" / "exclusions.txt")
+        assert rules.version == sys.version_info[:2]
 
 
 class TestFirstDifference:
