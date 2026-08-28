@@ -171,3 +171,17 @@ class TestReport:
         with pytest.raises(SystemExit) as e:
             main([str(tmp_path), "--oracle-python", "/nonexistent/python-xyz"])
         assert e.value.code != 0
+
+    def test_a_mismatch_says_what_actually_differed(self, tmp_path):
+        """A report that only names the interpreter is a report nobody acts on."""
+        case = tmp_path / "c.py"
+        case.write_text("print('hello')")
+        liar = Interpreter("liar", (sys.executable, "-c", "print('goodbye'); raise SystemExit"))
+        # The liar ignores the script path appended after its argv and prints
+        # something else, which is exactly the shape of a real divergence.
+        result = compare(case, oracle=CPYTHON, against=[liar])
+        assert result.outcome is Outcome.MISMATCH
+        detail = "; ".join(result.detail["liar"])
+        assert "stdout" in detail
+        assert "hello" in detail
+        assert "goodbye" in detail

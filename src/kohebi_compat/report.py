@@ -86,10 +86,16 @@ def to_markdown(summary: Summary, results: list[Result]) -> str:
 
     failures = [r for r in results if r.outcome is Outcome.MISMATCH]
     if failures:
-        lines += ["", "## Mismatches", "", "| Case | Disagreed |", "| --- | --- |"]
-        lines.extend(f"| `{r.case}` | {', '.join(r.disagreed)} |" for r in failures[:200])
+        lines += ["", "## Mismatches", ""]
+        for r in failures[:200]:
+            lines.append(f"### `{r.case}`")
+            lines.append("")
+            for name in r.disagreed:
+                detail = r.detail.get(name) or ["no detail recorded"]
+                lines.append(f"- **{name}**: {'; '.join(detail)}")
+            lines.append("")
         if len(failures) > 200:
-            lines.append(f"| ... | {len(failures) - 200} more |")
+            lines.append(f"...and {len(failures) - 200} more.")
 
     return "\n".join(lines) + "\n"
 

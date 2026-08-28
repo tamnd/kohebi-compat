@@ -97,6 +97,24 @@ class Execution:
             normalise(self.stderr, how),
         )
 
+    def differences(self, other: Execution, how: Normalisation) -> list[str]:
+        """Which fields differ, and the first line on which they do.
+
+        A report saying only that PyPy disagreed is a report nobody acts on.
+        This is what makes a mismatch into something someone can open.
+        """
+        if self.timed_out or other.timed_out:
+            return ["timed out"]
+        out = []
+        if self.returncode != other.returncode:
+            out.append(f"exit {self.returncode} vs {other.returncode}")
+        for field_name in ("stdout", "stderr"):
+            mine = normalise(getattr(self, field_name), how)
+            theirs = normalise(getattr(other, field_name), how)
+            if mine != theirs:
+                out.append(f"{field_name}: {_first_difference(mine, theirs)}")
+        return out
+
 
 @dataclass(slots=True)
 class Result:
@@ -105,6 +123,8 @@ class Result:
     oracle: Execution | None = None
     others: dict[str, Execution] = field(default_factory=dict)
     disagreed: list[str] = field(default_factory=list)
+    detail: dict[str, list[str]] = field(default_factory=dict)
+    """Per interpreter, what actually differed. Keyed by interpreter name."""
     note: str = ""
 
     @property
@@ -182,6 +202,7 @@ def compare(
             result.others[interp.name] = got
             if got.timed_out or got.key(how) != expected:
                 result.disagreed.append(interp.name)
+                result.detail[interp.name] = oracle_run.differences(got, how)
 
         if result.disagreed:
             result.outcome = Outcome.MISMATCH
@@ -194,3 +215,17 @@ def collect(root: Path) -> list[Path]:
     Files whose name starts with an underscore are helpers, not cases.
     """
     return sorted(p for p in root.rglob("*.py") if not p.name.startswith("_"))
+
+
+def _first_difference(a: bytes, b: bytes, *, width: int = 90) -> str:
+    """Describe where two outputs first diverge, in one readable line."""
+    left = a.decode("utf-8", "replace").splitlines()
+    right = b.decode("utf-8", "replace").splitlines()
+    for i, (x, y) in enumerate(zip(left, right, strict=False), start=1):
+        if x != y:
+            return f"line {i}, {x[:width]!r} vs {y[:width]!r}"
+    if len(left) != len(right):
+        longer, which = (left, "oracle") if len(left) > len(right) else (right, "candidate")
+        extra = longer[min(len(left), len(right))][:width]
+        return f"{which} has {abs(len(left) - len(right))} extra line(s), first {extra!r}"
+    return "differs only in trailing bytes"
