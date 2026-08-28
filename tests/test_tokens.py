@@ -9,48 +9,20 @@ when it does not.
 from __future__ import annotations
 
 import os
-import stat
 import sys
 from pathlib import Path
 
 import pytest
 
-from kohebi_compat.tokens import (
+from kohebi_compat.corpus import (
     Exclusions,
     Failure,
-    TokenOutcome,
-    _failure_from_report,
-    _first_difference,
-    compare_source,
+    FileOutcome,
     compiler_verdict,
-    cpython_tokens,
     default_corpus,
+    failure_from_report,
 )
-
-# A stand-in for the kohebi binary. It reads Python source on stdin and prints
-# whatever the test told it to print, so the harness can be driven into every
-# outcome without a real runtime. Bytes on the way in, like the real one, since
-# what encoding they are in is the file's own business to say.
-_FAKE = """\
-import sys
-sys.stdin.buffer.read()
-out = {out!r}
-err = {err!r}
-sys.stdout.write(out)
-sys.stderr.write(err)
-sys.exit({code})
-"""
-
-
-@pytest.fixture
-def fake_kohebi(tmp_path: Path):
-    def make(*, out: str = "", err: str = "", code: int = 0) -> list[str]:
-        script = tmp_path / f"fake_{abs(hash((out, err, code)))}.py"
-        script.write_text(_FAKE.format(out=out, err=err, code=code))
-        script.chmod(script.stat().st_mode | stat.S_IEXEC)
-        return [sys.executable, str(script)]
-
-    return make
+from kohebi_compat.tokens import _first_difference, compare_source, cpython_tokens
 
 
 def _jsonl(*tokens: tuple[str, int, int, int, int, str]) -> str:
@@ -68,7 +40,7 @@ def test_identical_streams_match(fake_kohebi):
     assert not isinstance(theirs, Failure)
     out = _jsonl(*[(t[0], t[1][0], t[1][1], t[2][0], t[2][1], t[3]) for t in theirs])
     result = compare_source(source, kohebi=fake_kohebi(out=out))
-    assert result.outcome is TokenOutcome.MATCH
+    assert result.outcome is FileOutcome.MATCH
 
 
 def test_a_wrong_column_is_a_mismatch(fake_kohebi):
@@ -78,14 +50,14 @@ def test_a_wrong_column_is_a_mismatch(fake_kohebi):
         ("ENDMARKER", 9, 9, 9, 9, ""),
     )
     result = compare_source("x\n", kohebi=fake_kohebi(out=out))
-    assert result.outcome is TokenOutcome.MISMATCH
+    assert result.outcome is FileOutcome.MISMATCH
     assert "token 2" in result.detail
 
 
 def test_a_short_stream_says_where_it_stopped(fake_kohebi):
     out = _jsonl(("NAME", 1, 0, 1, 1, "x"))
     result = compare_source("x\n", kohebi=fake_kohebi(out=out))
-    assert result.outcome is TokenOutcome.MISMATCH
+    assert result.outcome is FileOutcome.MISMATCH
     assert "we stopped after 1 tokens" in result.detail
 
 
@@ -95,27 +67,27 @@ def test_an_admitted_gap_is_not_a_wrong_answer(fake_kohebi):
         code=1,
     )
     result = compare_source('f"{x}"\n', kohebi=kohebi)
-    assert result.outcome is TokenOutcome.UNSUPPORTED
+    assert result.outcome is FileOutcome.UNSUPPORTED
     assert result.passed
 
 
 def test_refusing_a_file_cpython_accepts_is_a_false_reject(fake_kohebi):
     kohebi = fake_kohebi(err="SyntaxError: invalid syntax\n", code=1)
     result = compare_source("x = 1\n", kohebi=kohebi)
-    assert result.outcome is TokenOutcome.FALSE_REJECT
+    assert result.outcome is FileOutcome.FALSE_REJECT
     assert not result.passed
 
 
 def test_accepting_a_file_cpython_refuses_is_a_false_accept(fake_kohebi):
     out = _jsonl(("NAME", 1, 0, 1, 1, "x"))
     result = compare_source('x = "abc\n', kohebi=fake_kohebi(out=out))
-    assert result.outcome is TokenOutcome.FALSE_ACCEPT
+    assert result.outcome is FileOutcome.FALSE_ACCEPT
 
 
 def test_the_same_refusal_in_different_words_is_a_wrong_message(fake_kohebi):
     kohebi = fake_kohebi(err="SyntaxError: string was not closed\n", code=1)
     result = compare_source('x = "abc\n', kohebi=kohebi)
-    assert result.outcome is TokenOutcome.WRONG_MESSAGE
+    assert result.outcome is FileOutcome.WRONG_MESSAGE
     assert "unterminated string literal" in result.detail
 
 
@@ -124,7 +96,7 @@ def test_the_same_refusal_in_the_same_words_matches(fake_kohebi):
         err="SyntaxError: unterminated string literal (detected at line 1)\n", code=1
     )
     result = compare_source('x = "abc\n', kohebi=kohebi)
-    assert result.outcome is TokenOutcome.MATCH
+    assert result.outcome is FileOutcome.MATCH
 
 
 def test_the_compiler_outranks_the_tokenize_module(fake_kohebi):
@@ -133,7 +105,7 @@ def test_the_compiler_outranks_the_tokenize_module(fake_kohebi):
     source = "€ = 2\n"
     assert not isinstance(cpython_tokens(source.encode()), Failure)
     kohebi = fake_kohebi(err="SyntaxError: invalid character '€' (U+20AC)\n", code=1)
-    assert compare_source(source, kohebi=kohebi).outcome is TokenOutcome.MATCH
+    assert compare_source(source, kohebi=kohebi).outcome is FileOutcome.MATCH
 
 
 class TestFailureParsing:
@@ -141,15 +113,15 @@ class TestFailureParsing:
         report = (
             "  File \"t.py\", line 1\n    x = (\n        ^\nSyntaxError: '(' was never closed\n"
         )
-        assert _failure_from_report(report) == Failure("SyntaxError", "'(' was never closed")
+        assert failure_from_report(report) == Failure("SyntaxError", "'(' was never closed")
 
     def test_an_indentation_error_keeps_its_own_class(self):
-        assert _failure_from_report("IndentationError: unexpected indent\n").kind == (
+        assert failure_from_report("IndentationError: unexpected indent\n").kind == (
             "IndentationError"
         )
 
     def test_an_empty_report_does_not_crash(self):
-        assert _failure_from_report("").message == ""
+        assert failure_from_report("").message == ""
 
 
 class TestCompilerVerdict:
@@ -306,7 +278,7 @@ def test_a_file_that_is_not_utf8_is_compared_rather_than_skipped(tmp_path: Path,
     result = compare_file(
         path, kohebi=fake_kohebi(err=f"{theirs.kind}: {theirs.message}\n", code=1)
     )
-    assert result.outcome is TokenOutcome.MATCH
+    assert result.outcome is FileOutcome.MATCH
     assert result.passed
 
 
@@ -329,4 +301,4 @@ def test_a_file_is_read_in_the_encoding_it_declares(tmp_path: Path, fake_kohebi)
     assert any(t[3] == "'café'" for t in theirs), theirs
     out = _jsonl(*[(t[0], t[1][0], t[1][1], t[2][0], t[2][1], t[3]) for t in theirs])
     result = compare_file(path, kohebi=fake_kohebi(out=out))
-    assert result.outcome is TokenOutcome.MATCH
+    assert result.outcome is FileOutcome.MATCH

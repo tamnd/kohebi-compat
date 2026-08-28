@@ -1,22 +1,27 @@
 """`kohebi-compat` command line entry point.
 
-Two subcommands, because a runtime that cannot run a program yet still has
+Three subcommands, because a runtime that cannot run a program yet still has
 parts worth checking:
 
     kohebi-compat run      whole programs, compared by what they print
     kohebi-compat tokens   token streams, compared against CPython's tokenizer
+    kohebi-compat trees    syntax trees, compared against CPython's `ast.dump`
 
-`run` is the end goal. `tokens` is what tells us today whether the frontend is
-right, over a corpus far larger than anything we would write by hand.
+`run` is the end goal. The other two are what tell us today whether the
+frontend is right, over a corpus far larger than anything we would write by
+hand. They take the same arguments and differ only in which stage they ask
+both sides about.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from . import report
+from . import report, tokens, trees
+from .corpus import Exclusions, FileOutcome, FileResult, default_corpus, find_kohebi
 from .normalize import LENIENT, STRICT
 from .runner import (
     CPYTHON,
@@ -29,8 +34,9 @@ from .runner import (
     collect,
     compare,
 )
-from .tokens import Exclusions, TokenOutcome, default_corpus, find_kohebi
-from .tokens import run as run_tokens
+
+Differential = Callable[..., Iterator[FileResult]]
+"""A corpus comparison: paths in, one result per path out."""
 
 _INTERPRETERS = {i.name: i for i in (CPYTHON, KOHEBI_RUN, KOHEBI_BUILD, PYPY, GRAALPY)}
 
@@ -42,10 +48,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     _add_run(sub.add_parser("run", help="Run whole programs and compare their output."))
-    _add_tokens(sub.add_parser("tokens", help="Compare token streams against CPython."))
+    _add_corpus(
+        sub.add_parser("tokens", help="Compare token streams against CPython."),
+        stage="tokenize",
+        stem="tokens",
+    )
+    _add_corpus(
+        sub.add_parser("trees", help="Compare syntax trees against CPython."),
+        stage="parse",
+        stem="trees",
+    )
     args = parser.parse_args(argv)
     if args.command == "tokens":
-        return _tokens(args, parser)
+        return _corpus(
+            args,
+            parser,
+            differential=tokens.run,
+            title="Tokenizer agreement",
+            stem="tokens",
+            noun="tokenized",
+        )
+    if args.command == "trees":
+        unusable = trees.oracle_is_usable()
+        if unusable is not None:
+            parser.error(unusable)
+        return _corpus(
+            args,
+            parser,
+            differential=trees.run,
+            title="Parser agreement",
+            stem="trees",
+            noun="parsed",
+        )
     return _run(args, parser)
 
 
@@ -164,14 +198,19 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 0 if all(r.passed for r in results) else 1
 
 
-def _add_tokens(parser: argparse.ArgumentParser) -> None:
+def _add_corpus(parser: argparse.ArgumentParser, *, stage: str, stem: str) -> None:
+    """Arguments shared by every differential that walks a corpus of files.
+
+    `tokens` and `trees` ask about different stages and are otherwise the same
+    command, so they get the same flags rather than two sets that drift apart.
+    """
     parser.add_argument(
         "corpus",
         type=Path,
         nargs="*",
         default=None,
         help=(
-            "Directories or files to tokenize. Defaults to the standard "
+            f"Directories or files to {stage}. Defaults to the standard "
             "library of the oracle interpreter, which is a few thousand files "
             "of real Python that are already on the machine."
         ),
@@ -208,7 +247,7 @@ def _add_tokens(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         metavar="DIR",
-        help="Write tokens.json and tokens.md here.",
+        help=f"Write {stem}.json and {stem}.md here.",
     )
     parser.add_argument(
         "--min-agreement",
@@ -224,7 +263,15 @@ def _add_tokens(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--quiet", "-q", action="store_true")
 
 
-def _tokens(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+def _corpus(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    *,
+    differential: Differential,
+    title: str,
+    stem: str,
+    noun: str,
+) -> int:
     kohebi = find_kohebi(args.kohebi)
     if kohebi is None:
         parser.error(
@@ -248,21 +295,21 @@ def _tokens(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     print(f"corpus: {len(paths)} files from {', '.join(str(r) for r in roots)}", file=sys.stderr)
 
     results = []
-    for result in run_tokens(paths, kohebi=kohebi, exclusions=exclusions, jobs=args.jobs):
+    for result in differential(paths, kohebi=kohebi, exclusions=exclusions, jobs=args.jobs):
         results.append(result)
         if not args.quiet and result.outcome not in (
-            TokenOutcome.MATCH,
-            TokenOutcome.EXCLUDED,
-            TokenOutcome.UNREADABLE,
+            FileOutcome.MATCH,
+            FileOutcome.EXCLUDED,
+            FileOutcome.UNREADABLE,
         ):
             print(f"{result.outcome.value:14} {result.path}: {result.detail}", file=sys.stderr)
 
-    summary = report.summarise_tokens(results)
-    print(report.tokens_to_markdown(summary, results))
+    summary = report.summarise_files(results)
+    print(report.files_to_markdown(summary, results, title=title))
 
     if args.out:
-        report.write_tokens(summary, results, args.out)
-        print(f"wrote {args.out}/tokens.md", file=sys.stderr)
+        report.write_files(summary, results, args.out, stem=stem, title=title)
+        print(f"wrote {args.out}/{stem}.md", file=sys.stderr)
 
     # Two separate failures. A wrong answer is always a bug and always fails.
     # A gap kohebi admits to is not a bug, it is coverage, and it fails only
@@ -271,7 +318,7 @@ def _tokens(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     # ignore it.
     wrong = [r for r in results if not r.passed]
     if wrong:
-        print(f"{len(wrong)} file(s) tokenized differently from CPython", file=sys.stderr)
+        print(f"{len(wrong)} file(s) {noun} differently from CPython", file=sys.stderr)
         return 1
     if args.min_agreement is not None and summary.agreement < args.min_agreement:
         print(
