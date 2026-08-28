@@ -138,11 +138,24 @@ jobs:
           --out results/trees-${{ matrix.python }}
           ${{ matrix.python == '3.14' && '--min-agreement 1.0' || '' }}
           --quiet
+      - name: Errors, corpus of files written to be refused
+        # 3.14 only, and unlike the other two steps that is not about the
+        # corpus being different. It is the same corpus on every version. This
+        # compares wording, character for character, and CPython rewords its
+        # own errors between releases, so running it against 3.13 would measure
+        # that release's wording against 3.14's rather than anything here.
+        if: always() && matrix.python == '3.14'
+        run: >
+          kohebi-compat errors
+          --kohebi .kohebi/target/release/kohebi
+          --out results/errors-${{ matrix.python }}
+          --min-agreement 1.0
       - name: Summarise
         if: always()
         run: |
           cat results/tokens-${{ matrix.python }}/tokens.md >> "$GITHUB_STEP_SUMMARY" || true
           cat results/trees-${{ matrix.python }}/trees.md >> "$GITHUB_STEP_SUMMARY" || true
+          cat results/errors-${{ matrix.python }}/errors.md >> "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:

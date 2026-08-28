@@ -2,3 +2,4 @@
 # handles the exact line endings it was written with, so git must not normalise
 # them on the way in or translate them on the way out.
 corpus/local/** -text
+corpus/broken/** -text

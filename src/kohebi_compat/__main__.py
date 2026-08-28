@@ -1,16 +1,19 @@
 """`kohebi-compat` command line entry point.
 
-Three subcommands, because a runtime that cannot run a program yet still has
+Four subcommands, because a runtime that cannot run a program yet still has
 parts worth checking:
 
     kohebi-compat run      whole programs, compared by what they print
     kohebi-compat tokens   token streams, compared against CPython's tokenizer
     kohebi-compat trees    syntax trees, compared against CPython's `ast.dump`
+    kohebi-compat errors   refusals, compared as the block a user is shown
 
-`run` is the end goal. The other two are what tell us today whether the
-frontend is right, over a corpus far larger than anything we would write by
-hand. They take the same arguments and differ only in which stage they ask
-both sides about.
+`run` is the end goal. The other three are what tell us today whether the
+frontend is right. `tokens` and `trees` work over a corpus far larger than
+anything we would write by hand, and `errors` cannot, because a standard
+library is by definition a few thousand files that parse. They take the same
+arguments and differ in which stage they ask both sides about and, for
+`errors`, in which corpus they reach for when nobody names one.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from . import report, tokens, trees
+from . import errors, report, tokens, trees
 from .corpus import Exclusions, FileOutcome, FileResult, default_corpus, find_kohebi
 from .normalize import LENIENT, STRICT
 from .runner import (
@@ -40,6 +43,9 @@ Differential = Callable[..., Iterator[FileResult]]
 
 _INTERPRETERS = {i.name: i for i in (CPYTHON, KOHEBI_RUN, KOHEBI_BUILD, PYPY, GRAALPY)}
 
+BROKEN = Path("corpus/broken")
+"""Files written to be refused, which is the corpus `errors` compares over."""
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -57,6 +63,16 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_parser("trees", help="Compare syntax trees against CPython."),
         stage="parse",
         stem="trees",
+    )
+    _add_corpus(
+        sub.add_parser("errors", help="Compare refusals against CPython."),
+        stage="refuse",
+        stem="errors",
+        default_corpus_help=(
+            "Defaults to corpus/broken, a directory of files written to be "
+            "refused. A standard library cannot be the corpus here, because "
+            "every file in one parses."
+        ),
     )
     args = parser.parse_args(argv)
     if args.command == "tokens":
@@ -79,6 +95,16 @@ def main(argv: list[str] | None = None) -> int:
             title="Parser agreement",
             stem="trees",
             noun="parsed",
+        )
+    if args.command == "errors":
+        return _corpus(
+            args,
+            parser,
+            differential=errors.run,
+            title="Error report agreement",
+            stem="errors",
+            noun="refused",
+            default_roots=[BROKEN],
         )
     return _run(args, parser)
 
@@ -198,21 +224,32 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 0 if all(r.passed for r in results) else 1
 
 
-def _add_corpus(parser: argparse.ArgumentParser, *, stage: str, stem: str) -> None:
+def _add_corpus(
+    parser: argparse.ArgumentParser,
+    *,
+    stage: str,
+    stem: str,
+    default_corpus_help: str | None = None,
+) -> None:
     """Arguments shared by every differential that walks a corpus of files.
 
-    `tokens` and `trees` ask about different stages and are otherwise the same
-    command, so they get the same flags rather than two sets that drift apart.
+    The three of them ask about different stages and are otherwise the same
+    command, so they get the same flags rather than three sets that drift
+    apart. Only the corpus they fall back on differs.
     """
     parser.add_argument(
         "corpus",
         type=Path,
         nargs="*",
         default=None,
-        help=(
-            f"Directories or files to {stage}. Defaults to the standard "
-            "library of the oracle interpreter, which is a few thousand files "
-            "of real Python that are already on the machine."
+        help=f"Directories or files to {stage}. "
+        + (
+            default_corpus_help
+            or (
+                "Defaults to the standard library of the oracle interpreter, "
+                "which is a few thousand files of real Python that are "
+                "already on the machine."
+            )
         ),
     )
     parser.add_argument(
@@ -271,6 +308,7 @@ def _corpus(
     title: str,
     stem: str,
     noun: str,
+    default_roots: list[Path] | None = None,
 ) -> int:
     kohebi = find_kohebi(args.kohebi)
     if kohebi is None:
@@ -279,7 +317,7 @@ def _corpus(
             "kohebi checkout and pass --kohebi target/debug/kohebi."
         )
 
-    roots = args.corpus or [default_corpus(args.oracle_python)]
+    roots = args.corpus or default_roots or [default_corpus(args.oracle_python)]
     paths = _gather(roots)
     if not paths:
         print(f"No .py files under {', '.join(str(r) for r in roots)}.", file=sys.stderr)
