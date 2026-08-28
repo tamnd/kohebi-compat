@@ -14,6 +14,7 @@ worth reading.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
@@ -115,8 +116,11 @@ class TestTheOracleVersion:
     it two thousand times.
     """
 
-    def test_the_running_interpreter_is_new_enough(self):
-        assert oracle_is_usable() is None
+    def test_the_running_interpreter_is_judged_by_its_own_version(self):
+        """The harness tests run on 3.12 as well, so this asserts the rule
+        rather than a verdict. Every other test in this file holds `ast.dump`
+        up against itself and passes on any version."""
+        assert (oracle_is_usable() is None) == (sys.version_info[:2] >= (3, 13))
 
     def test_313_and_later_are_accepted(self):
         assert oracle_is_usable((3, 13)) is None
