@@ -75,23 +75,39 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each alternative is compared against the CPython version it targets,
+        # not against current stable. PyPy 7.3.23 implements 3.11, and running
+        # it against a 3.14 oracle mostly measures three releases of error
+        # message rewording, which says nothing about PyPy.
         include:
           - runtime: pypy
             setup: "pypy3.11"
+            oracle: "3.11"
           - runtime: graalpy
             setup: "graalpy-24.2"
+            oracle: "3.11"
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Install the oracle, CPython ${{ matrix.oracle }}
+        id: oracle
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.oracle }}
       - name: Install ${{ matrix.runtime }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.setup }}
-      - run: python3.14 -m pip install -e . || python -m pip install -e .
+      - run: ${{ steps.oracle.outputs.python-path }} -m pip install -e .
       - name: Compare ${{ matrix.runtime }} against the oracle
-        run: kohebi-compat suites --against ${{ matrix.runtime }} --out results/${{ matrix.runtime }}
+        # The oracle is named by path rather than left to PATH resolution.
+        # setup-python puts the most recently installed interpreter first, so
+        # `python3` here is the alternative runtime, and the suite would
+        # quietly be comparing PyPy against itself.
+        run: >
+          ${{ steps.oracle.outputs.python-path }} -m kohebi_compat suites
+          --against ${{ matrix.runtime }}
+          --oracle-python ${{ steps.oracle.outputs.python-path }}
+          --out results/${{ matrix.runtime }}
       - uses: actions/upload-artifact@v7
         with:
           name: results-${{ matrix.runtime }}

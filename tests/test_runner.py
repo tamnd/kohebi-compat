@@ -24,6 +24,7 @@ from kohebi_compat import (
     execute,
     normalise,
 )
+from kohebi_compat.__main__ import main
 
 
 @pytest.fixture
@@ -152,3 +153,21 @@ class TestReport:
         assert data["total"] == 2
         assert data["disagreements"]["stdout"] == 1
         assert "b.py" in (tmp_path / "report.md").read_text()
+
+    def test_oracle_python_overrides_the_command(self, tmp_path):
+        """Comparing PyPy against a 3.14 oracle measures the version gap.
+
+        PyPy 7.3.23 implements Python 3.11. Without this override, most of
+        what the suite reports is three releases of error message rewording,
+        which says nothing about PyPy and would say nothing about kohebi.
+        """
+        case = tmp_path / "c.py"
+        case.write_text("print('ok')")
+        rc = main([str(tmp_path), "--against", "cpython", "--oracle-python", sys.executable, "-q"])
+        assert rc == 0
+
+    def test_a_missing_oracle_python_is_an_error_not_a_pass(self, tmp_path):
+        (tmp_path / "c.py").write_text("print('ok')")
+        with pytest.raises(SystemExit) as e:
+            main([str(tmp_path), "--oracle-python", "/nonexistent/python-xyz"])
+        assert e.value.code != 0

@@ -14,6 +14,7 @@ from .runner import (
     KOHEBI_BUILD,
     KOHEBI_RUN,
     PYPY,
+    Interpreter,
     Outcome,
     collect,
     compare,
@@ -43,6 +44,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Interpreter to compare against the oracle. Repeatable.",
     )
     parser.add_argument("--oracle", default="cpython", choices=sorted(_INTERPRETERS))
+    parser.add_argument(
+        "--oracle-python",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Exact interpreter to use as the oracle, overriding the command "
+            "looked up on PATH. Use this when comparing a runtime that targets "
+            "an older Python: PyPy 7.3.23 implements 3.11, and comparing it "
+            "against a 3.14 oracle mostly measures the three versions in "
+            "between rather than anything about PyPy."
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=60.0, metavar="SECONDS")
     parser.add_argument(
         "--lenient",
@@ -64,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
 
     against = [_INTERPRETERS[n] for n in (args.against or ["kohebi-run", "kohebi-build"])]
     oracle = _INTERPRETERS[args.oracle]
+    if args.oracle_python:
+        oracle = Interpreter(oracle.name, (args.oracle_python,))
+        if not oracle.available():
+            parser.error(f"--oracle-python {args.oracle_python} is not executable")
     how = LENIENT if args.lenient else STRICT
 
     cases = collect(args.suite)
