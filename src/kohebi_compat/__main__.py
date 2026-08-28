@@ -69,6 +69,17 @@ def main(argv: list[str] | None = None) -> int:
         metavar="DIR",
         help="Write summary.json and report.md here.",
     )
+    parser.add_argument(
+        "--tolerate-mismatch",
+        action="store_true",
+        help=(
+            "Exit 0 when the only failures are mismatches. This is for "
+            "measuring a runtime that is not kohebi, where disagreement with "
+            "CPython is the result rather than a regression. A run that could "
+            "not happen at all, meaning a failed oracle, a timeout or a "
+            "missing interpreter, still exits non-zero."
+        ),
+    )
     parser.add_argument("--quiet", "-q", action="store_true")
     args = parser.parse_args(argv)
 
@@ -115,6 +126,18 @@ def main(argv: list[str] | None = None) -> int:
         report.write(summary, results, args.out)
         print(f"wrote {args.out}/summary.json", file=sys.stderr)
 
+    # A suite that could not run is a different failure from a suite that ran
+    # and found disagreements, and only the second one is ever tolerable.
+    broken = [
+        r
+        for r in results
+        if r.outcome in (Outcome.ORACLE_FAILED, Outcome.TIMEOUT, Outcome.NOT_INSTALLED)
+    ]
+    if broken:
+        print(f"{len(broken)} case(s) could not be run: {broken[0].note}", file=sys.stderr)
+        return 1
+    if args.tolerate_mismatch:
+        return 0
     return 0 if all(r.passed for r in results) else 1
 
 

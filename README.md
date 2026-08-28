@@ -33,6 +33,8 @@ $ kohebi-compat suites --out results/local
 
 Each alternative runtime is compared against the CPython version it targets, not against current stable. PyPy 7.3.23 implements Python 3.11, so running it against a 3.14 oracle mostly measures three releases of error message rewording and says almost nothing about PyPy. `--oracle-python` names the oracle by path for exactly that reason, and because leaving it to `PATH` is how a suite ends up quietly comparing a runtime against itself.
 
+The exit code separates two things that look alike. A disagreement exits 1, and so does a run that could not happen at all, meaning the oracle itself failed, a case timed out, or the interpreter being measured is not installed. `--tolerate-mismatch` forgives the first and never the second, which is what the PyPy and GraalPy jobs use: their disagreements with CPython are the measurement, but a job that installed nothing and measured nothing has to stay red.
+
 Comparison is strict by default. Traceback file names, line numbers, and caret positions are compared, because getting them right is a real requirement and is the first thing users notice. `--lenient` compares only the final exception line, and exists for triage rather than for reporting.
 
 ## What is normalised, and what is not

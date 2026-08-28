@@ -101,14 +101,19 @@ class TestCompare:
         result = compare(path, against=[failing])
         assert result.outcome is Outcome.MISMATCH
 
-    def test_missing_interpreter_is_not_a_pass_or_a_failure(self, script):
+    def test_a_missing_interpreter_is_not_a_pass(self, script):
+        """An interpreter that never ran cannot have agreed with the oracle.
+
+        This used to return MATCH, which meant running the suite without
+        kohebi installed, the situation everyone is in right now, printed a
+        100% pass rate for a runtime that does not exist yet.
+        """
         path = script("print(1)")
         absent = Interpreter("absent", ("definitely-not-a-real-binary-xyz",))
         result = compare(path, against=[absent])
-        # Absent tools are recorded, and must not be silently counted as agreement.
-        assert "absent" in result.others
-        assert result.outcome is Outcome.MATCH
-        assert result.others["absent"].duration_s == 0.0
+        assert result.outcome is Outcome.NOT_INSTALLED
+        assert not result.passed
+        assert "absent" in result.note
 
 
 class TestCollect:
@@ -198,6 +203,38 @@ class TestReport:
         assert result.outcome is Outcome.MATCH
         assert result.oracle is not None
         assert result.oracle.stdout == b"ran\n"
+
+    def test_tolerate_mismatch_forgives_a_disagreement(self, tmp_path):
+        """PyPy and GraalPy disagree with CPython on purpose.
+
+        Their jobs exist to record how much, so a mismatch there is data.
+        Without this the alternatives jobs are red on every run, and a check
+        that is always red is a check nobody reads.
+        """
+        # A case that answers differently the second time it runs, which is
+        # how CPython is made to disagree with itself without a stub
+        # interpreter that would only work on one platform. The oracle prints
+        # 1 and the candidate prints 2.
+        (tmp_path / "c.py").write_text(
+            "import pathlib\n"
+            "p = pathlib.Path('counter')\n"
+            "p.write_text(p.read_text() + 'x' if p.exists() else 'x')\n"
+            "print(len(p.read_text()))\n"
+        )
+        argv = [str(tmp_path), "--against", "cpython", "-q", "--tolerate-mismatch"]
+        assert main(argv) == 0
+        assert main(argv[:-1]) == 1
+
+    def test_tolerate_mismatch_still_fails_when_nothing_ran(self, tmp_path):
+        """The distinction the flag has to preserve.
+
+        Forgiving a disagreement is fine. Forgiving a suite that could not run
+        is how a broken harness reports success, which this suite has already
+        done once.
+        """
+        (tmp_path / "c.py").write_text("raise SystemExit(1)")
+        rc = main([str(tmp_path), "--against", "cpython", "-q", "--tolerate-mismatch"])
+        assert rc == 1
 
     def test_an_oracle_that_cannot_run_the_case_is_not_a_match(self, tmp_path):
         """The guard that would have caught the launch bug on the first run.

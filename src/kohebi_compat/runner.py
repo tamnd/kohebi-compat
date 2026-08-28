@@ -220,13 +220,23 @@ def compare(
                 note=f"oracle exited {oracle_run.returncode}: {why}",
             )
 
+        # An interpreter that is not installed did not agree with anything. It
+        # used to be recorded and skipped, which left the case sitting on
+        # MATCH, so running the suite without kohebi built reported a perfect
+        # score for a runtime that never started.
+        missing = [i.name for i in against if not i.available()]
+        if missing:
+            return Result(
+                name,
+                Outcome.NOT_INSTALLED,
+                oracle=oracle_run,
+                note=f"not installed: {', '.join(missing)}",
+            )
+
         result = Result(name, Outcome.MATCH, oracle=oracle_run)
         expected = oracle_run.key(how)
 
         for interp in against:
-            if not interp.available():
-                result.others[interp.name] = Execution(interp.name, -1, b"", b"", 0.0)
-                continue
             got = execute(interp, script, timeout_s=timeout_s, cwd=cwd)
             result.others[interp.name] = got
             if got.timed_out or got.key(how) != expected:
