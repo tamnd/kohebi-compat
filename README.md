@@ -63,9 +63,11 @@ Every file lands in one of these, and only some of them are failures:
 | `wrong-message` | Both refused it, we said something else | yes |
 | `unsupported` | kohebi said so itself, so it is a gap and not a wrong answer | |
 | `excluded` | Named in `corpus/exclusions.txt`, with a reason | |
-| `unreadable` | Not valid UTF-8, which real corpora contain on purpose | |
+| `unreadable` | Gone from disk between the listing and the read | |
 
 A wrong answer always fails. A gap kohebi admits to does not, because "f-strings are not implemented yet" would otherwise keep the build red for weeks and teach everyone to ignore it. It still counts against the agreement percentage, which is the number that says how much of Python works, and `--min-agreement` puts a floor under that number when there is one worth defending.
+
+Files go to both sides as bytes rather than as text, because what encoding a file is in is something the file itself says, on its first or second line, and reaching the same answer about that is the first thing either tokenizer has to get right. A file that is not UTF-8 and does not say so is not skipped: CPython refuses it, so there is a message to agree about. The three such files in CPython's own library are two that declare an encoding and one that exists to be refused.
 
 `corpus/local/` is the other half of the corpus. Real code is written by people who use four spaces, avoid tabs, and do not put a form feed in the middle of a class body, so a corpus of real code exercises the easy half of a tokenizer very thoroughly and the hard half not at all. Those files are small, deliberate, and all of them have to match.
 

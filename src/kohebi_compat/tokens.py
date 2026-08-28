@@ -58,7 +58,12 @@ class TokenOutcome(StrEnum):
     """Both refused it, and we did not say what CPython says."""
     EXCLUDED = "excluded"
     UNREADABLE = "unreadable"
-    """Not valid UTF-8, or gone from disk between listing and reading."""
+    """Gone from disk between the listing and the read.
+
+    A file that is not UTF-8 is not unreadable. It either declares what it is
+    and both sides decode it, or it declares nothing and both sides refuse it
+    with the same message.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +91,17 @@ class Failure:
     message: str
 
 
-def kohebi_tokens(source: str, *, kohebi: Sequence[str]) -> list[Tok] | Failure:
-    """Ask the kohebi binary to tokenize `source`."""
+def kohebi_tokens(source: bytes, *, kohebi: Sequence[str]) -> list[Tok] | Failure:
+    """Ask the kohebi binary to tokenize `source`.
+
+    Bytes rather than text, because deciding what encoding those bytes are in
+    is part of what is being compared. A file says so itself, in a comment on
+    its first or second line, and kohebi has to reach the same answer CPython
+    does before either of them has a token to show for it.
+    """
     proc = subprocess.run(
         [*kohebi, "tokenize", "--format", "json", "-"],
-        input=source.encode(),
+        input=source,
         capture_output=True,
         check=False,
     )
@@ -122,16 +133,25 @@ def _failure_from_report(report: str) -> Failure:
     return Failure(kind.strip(), message.strip())
 
 
-def cpython_tokens(source: str) -> list[Tok] | Failure:
+def cpython_tokens(source: bytes) -> list[Tok] | Failure:
     """Tokenize with CPython, falling back to `compile` for the message.
 
-    A file that `tokenize` rejects gets handed to `compile`, because the two
-    disagree about wording and the compiler's wording is the one users see and
-    the one kohebi reproduces. If `compile` somehow accepts it, the `tokenize`
-    error stands, since something has to be reported.
+    Decoding comes first and is its own way to fail. A file that declares an
+    encoding it does not have, or that is not UTF-8 and declares nothing, never
+    reaches a tokenizer at all, and what a user sees is the compiler's
+    complaint about the bytes.
+
+    A file that `tokenize` rejects gets handed to `compile` for the same
+    reason: the two disagree about wording and the compiler's wording is the
+    one users see and the one kohebi reproduces. If `compile` somehow accepts
+    it, the `tokenize` error stands, since something has to be reported.
     """
     try:
-        readline = io.StringIO(source).readline
+        text = decode(source)
+    except (SyntaxError, UnicodeDecodeError, LookupError) as exc:
+        return compiler_verdict(source) or Failure("SyntaxError", str(exc))
+    try:
+        readline = io.StringIO(text).readline
         return [
             (tokenize.tok_name[t.type], t.start, t.end, t.string)
             for t in tokenize.generate_tokens(readline)
@@ -140,7 +160,21 @@ def cpython_tokens(source: str) -> list[Tok] | Failure:
         return compiler_verdict(source) or Failure(type(exc).__name__, str(exc))
 
 
-def compiler_verdict(source: str) -> Failure | None:
+def decode(source: bytes) -> str:
+    """The text of a file, in whatever encoding it says it is in.
+
+    `detect_encoding` is a third oracle and it is not quite the one the
+    compiler uses, so a disagreement between them shows up as a decode that
+    fails here and a `compile` that succeeds, or the other way round. Over the
+    standard library they agree on every file. The byte order mark is dropped
+    rather than kept, because it is not part of the program and reading it as a
+    character makes the first token of every such file wrong.
+    """
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+    return source.decode(encoding)
+
+
+def compiler_verdict(source: bytes) -> Failure | None:
     """What `compile` says about this source, if it refuses it.
 
     The compiler is the second oracle and on error messages it is the one that
@@ -168,10 +202,10 @@ def compiler_verdict(source: str) -> Failure | None:
 
 def compare_source(source: str, *, kohebi: Sequence[str]) -> TokenResult:
     """Compare the two tokenizers on one piece of source text."""
-    return _compare(Path("<string>"), source, kohebi=kohebi)
+    return _compare(Path("<string>"), source.encode("utf-8"), kohebi=kohebi)
 
 
-def _compare(path: Path, source: str, *, kohebi: Sequence[str]) -> TokenResult:
+def _compare(path: Path, source: bytes, *, kohebi: Sequence[str]) -> TokenResult:
     ours = kohebi_tokens(source, kohebi=kohebi)
     theirs = cpython_tokens(source)
 
@@ -246,14 +280,10 @@ def _show(tok: Tok) -> str:
 
 def compare_file(path: Path, *, kohebi: Sequence[str]) -> TokenResult:
     try:
-        # utf-8-sig, not utf-8. A byte order mark is not part of the program,
-        # and CPython strips it while decoding the file. Reading it as a
-        # character instead makes the first token of every such file wrong for
-        # reasons that have nothing to do with either tokenizer.
-        source = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as exc:
-        # A corpus taken off a real machine has files that are not UTF-8 on
-        # purpose, because they are test data for the decoder.
+        source = path.read_bytes()
+    except OSError as exc:
+        # Gone from disk between the listing and the read, which happens on a
+        # machine that is doing anything else at the same time.
         return TokenResult(path, TokenOutcome.UNREADABLE, str(exc))
     return _compare(path, source, kohebi=kohebi)
 

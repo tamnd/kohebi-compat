@@ -29,10 +29,11 @@ from kohebi_compat.tokens import (
 
 # A stand-in for the kohebi binary. It reads Python source on stdin and prints
 # whatever the test told it to print, so the harness can be driven into every
-# outcome without a real runtime.
+# outcome without a real runtime. Bytes on the way in, like the real one, since
+# what encoding they are in is the file's own business to say.
 _FAKE = """\
 import sys
-sys.stdin.read()
+sys.stdin.buffer.read()
 out = {out!r}
 err = {err!r}
 sys.stdout.write(out)
@@ -63,7 +64,7 @@ def _jsonl(*tokens: tuple[str, int, int, int, int, str]) -> str:
 
 def test_identical_streams_match(fake_kohebi):
     source = "x\n"
-    theirs = cpython_tokens(source)
+    theirs = cpython_tokens(source.encode())
     assert not isinstance(theirs, Failure)
     out = _jsonl(*[(t[0], t[1][0], t[1][1], t[2][0], t[2][1], t[3]) for t in theirs])
     result = compare_source(source, kohebi=fake_kohebi(out=out))
@@ -130,7 +131,7 @@ def test_the_compiler_outranks_the_tokenize_module(fake_kohebi):
     # `tokenize` returns a NAME for this. The compiler refuses it, and the
     # compiler is what a user sees, so refusing it is the right answer.
     source = "€ = 2\n"
-    assert not isinstance(cpython_tokens(source), Failure)
+    assert not isinstance(cpython_tokens(source.encode()), Failure)
     kohebi = fake_kohebi(err="SyntaxError: invalid character '€' (U+20AC)\n", code=1)
     assert compare_source(source, kohebi=kohebi).outcome is TokenOutcome.MATCH
 
@@ -153,19 +154,19 @@ class TestFailureParsing:
 
 class TestCompilerVerdict:
     def test_valid_source_has_no_verdict(self):
-        assert compiler_verdict("x = 1\n") is None
+        assert compiler_verdict(b"x = 1\n") is None
 
     def test_the_message_carries_no_file_or_line(self):
-        verdict = compiler_verdict("x = (\n")
+        verdict = compiler_verdict(b"x = (\n")
         assert verdict == Failure("SyntaxError", "'(' was never closed")
 
     def test_a_parenthesis_in_the_message_survives(self):
         # str(exc) would be truncated at the wrong parenthesis here.
-        verdict = compiler_verdict("€ = 2\n")
+        verdict = compiler_verdict("€ = 2\n".encode())
         assert verdict == Failure("SyntaxError", "invalid character '€' (U+20AC)")
 
     def test_a_null_byte_is_rejected_before_parsing(self):
-        verdict = compiler_verdict("x = 1\0\n")
+        verdict = compiler_verdict(b"x = 1\0\n")
         assert verdict is not None
         assert "null byte" in verdict.message
 
@@ -242,8 +243,7 @@ class TestLocalCorpus:
 
     @pytest.mark.parametrize("path", _files(), ids=lambda p: p.name)
     def test_cpython_has_an_opinion_about_every_file(self, path: Path):
-        source = path.read_text(encoding="utf-8-sig")
-        tokens = cpython_tokens(source)
+        tokens = cpython_tokens(path.read_bytes())
         if isinstance(tokens, Failure):
             # The deliberately broken ones. Each still has to produce a real
             # message, since that message is what the comparison is about.
@@ -259,11 +259,47 @@ def test_the_repository_exclusions_file_parses():
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake binary is a POSIX shebang-free script")
-def test_a_file_that_is_not_utf8_is_reported_rather_than_crashing(tmp_path: Path, fake_kohebi):
+def test_a_file_that_is_not_utf8_is_compared_rather_than_skipped(tmp_path: Path, fake_kohebi):
+    """Bytes that are not UTF-8 and do not say what they are.
+
+    CPython refuses this, so there is a message to agree about, and agreeing
+    about it is the whole job. Skipping the file would have been a way of not
+    checking the one part of the frontend that runs before any of the rest.
+    """
     from kohebi_compat.tokens import compare_file
 
     path = tmp_path / "latin1.py"
     path.write_bytes(b"x = '\xff'\n")
-    result = compare_file(path, kohebi=fake_kohebi())
-    assert result.outcome is TokenOutcome.UNREADABLE
+    # Taken from the running interpreter rather than written down, because the
+    # wording changed in 3.14 and this suite runs on 3.12 through 3.14. Which
+    # message kohebi has to produce is a question for the corpus run against a
+    # real binary, and it is not this test's question.
+    theirs = compiler_verdict(path.read_bytes())
+    assert theirs is not None
+    result = compare_file(
+        path, kohebi=fake_kohebi(err=f"{theirs.kind}: {theirs.message}\n", code=1)
+    )
+    assert result.outcome is TokenOutcome.MATCH
     assert result.passed
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake binary is a POSIX shebang-free script")
+def test_a_file_is_read_in_the_encoding_it_declares(tmp_path: Path, fake_kohebi):
+    """A declared encoding changes what the tokens say, not just whether there
+    are any.
+
+    The two files in CPython's own library that declare one are both latin-1
+    and koi8-r, and both put the high bytes inside a string literal, so a
+    decoder that got the table wrong would still produce the right number of
+    tokens with the wrong text in one of them.
+    """
+    from kohebi_compat.tokens import compare_file
+
+    path = tmp_path / "latin1.py"
+    path.write_bytes(b"# coding: latin-1\nx = 'caf\xe9'\n")
+    theirs = cpython_tokens(path.read_bytes())
+    assert not isinstance(theirs, Failure)
+    assert any(t[3] == "'café'" for t in theirs), theirs
+    out = _jsonl(*[(t[0], t[1][0], t[1][1], t[2][0], t[2][1], t[3]) for t in theirs])
+    result = compare_file(path, kohebi=fake_kohebi(out=out))
+    assert result.outcome is TokenOutcome.MATCH
