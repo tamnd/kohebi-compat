@@ -20,8 +20,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .corpus import FileOutcome, FileResult
 from .runner import Outcome, Result
-from .tokens import TokenOutcome, TokenResult
 
 
 @dataclass(slots=True)
@@ -108,14 +108,14 @@ def write(summary: Summary, results: list[Result], out: Path) -> None:
 
 
 @dataclass(slots=True)
-class TokenSummary:
+class FileSummary:
     total: int
     by_outcome: dict[str, int]
     agreement: float
-    """Files whose token stream or error matched, over files we actually
-    compared. Excluded and unreadable files are not in either half, because
-    counting a file we skipped as a file we got right is how a number stops
-    being true."""
+    """Files where we agreed with CPython, over files we actually compared.
+
+    Excluded and unreadable files are not in either half, because counting a
+    file we skipped as a file we got right is how a number stops being true."""
     generated_at: str
     host: dict[str, str]
 
@@ -123,17 +123,17 @@ class TokenSummary:
         return json.dumps(asdict(self), indent=2, sort_keys=True) + "\n"
 
 
-def summarise_tokens(results: list[TokenResult]) -> TokenSummary:
+def summarise_files(results: list[FileResult]) -> FileSummary:
     outcomes = Counter(r.outcome.value for r in results)
     compared = [
-        r for r in results if r.outcome not in (TokenOutcome.EXCLUDED, TokenOutcome.UNREADABLE)
+        r for r in results if r.outcome not in (FileOutcome.EXCLUDED, FileOutcome.UNREADABLE)
     ]
     # UNSUPPORTED counts against agreement. It is an honest gap rather than a
-    # wrong answer, but it is still a file we cannot tokenize, and the number
-    # this repo exists to publish is how much of Python works.
-    agreed = sum(1 for r in compared if r.outcome is TokenOutcome.MATCH)
+    # wrong answer, but it is still a file we cannot read, and the number this
+    # repo exists to publish is how much of Python works.
+    agreed = sum(1 for r in compared if r.outcome is FileOutcome.MATCH)
 
-    return TokenSummary(
+    return FileSummary(
         total=len(results),
         by_outcome=dict(sorted(outcomes.items())),
         agreement=round(agreed / len(compared), 4) if compared else 0.0,
@@ -146,11 +146,11 @@ def summarise_tokens(results: list[TokenResult]) -> TokenSummary:
     )
 
 
-def tokens_to_markdown(
-    summary: TokenSummary, results: list[TokenResult], *, limit: int = 50
+def files_to_markdown(
+    summary: FileSummary, results: list[FileResult], *, title: str, limit: int = 50
 ) -> str:
     lines = [
-        "# Tokenizer agreement",
+        f"# {title}",
         "",
         f"Generated {summary.generated_at} on {summary.host['platform']}",
         f"against CPython {summary.host['python']}.",
@@ -165,7 +165,7 @@ def tokens_to_markdown(
     interesting = [
         r
         for r in results
-        if r.outcome not in (TokenOutcome.MATCH, TokenOutcome.EXCLUDED, TokenOutcome.UNREADABLE)
+        if r.outcome not in (FileOutcome.MATCH, FileOutcome.EXCLUDED, FileOutcome.UNREADABLE)
     ]
     if interesting:
         lines += [
@@ -185,7 +185,9 @@ def tokens_to_markdown(
     return "\n".join(lines) + "\n"
 
 
-def write_tokens(summary: TokenSummary, results: list[TokenResult], out: Path) -> None:
+def write_files(
+    summary: FileSummary, results: list[FileResult], out: Path, *, stem: str, title: str
+) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    (out / "tokens.json").write_text(summary.to_json())
-    (out / "tokens.md").write_text(tokens_to_markdown(summary, results))
+    (out / f"{stem}.json").write_text(summary.to_json())
+    (out / f"{stem}.md").write_text(files_to_markdown(summary, results, title=title))

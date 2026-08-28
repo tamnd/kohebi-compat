@@ -1,4 +1,4 @@
-# Files the tokenizer comparison does not look at, and why.
+# Files the corpus comparisons do not look at, and why.
 #
 # One rule per line, "<glob>: <reason>". The reason is required. An exclusion
 # saying "we do not support this yet" is fine and an exclusion with no reason
@@ -11,3 +11,5 @@
 # version or to compare against one version only, and both are worse.
 
 badsyntax_pep3120.py [python<3.14]: this file has no encoding declaration and is not UTF-8, and before 3.14 CPython reported that as the string literal failing to decode rather than as the file having no declaration. kohebi reproduces 3.14. The 3.14 job still compares it, and crates/kohebi-parse/tests/source.rs pins the same bytes on the Rust side.
+
+uts46data.py [python<3.14]: this file contains U+1C8A, which became printable in Unicode 16.0. `ast.dump` prints a string with `repr`, `repr` escapes whatever is not printable, and which characters those are comes from whichever Unicode database the interpreter was built with. 3.14 ships 16.0 and escapes nothing here, 3.13 ships 15.1 and writes \\u1c8a. kohebi reproduces 3.14, so the 3.14 job still compares it.
