@@ -141,7 +141,16 @@ def execute(
     env: dict[str, str] | None = None,
 ) -> Execution:
     """Run one program under one interpreter, capturing everything."""
-    full_env = {**os.environ, "PYTHONHASHSEED": "0", **(env or {})}
+    full_env = {
+        **os.environ,
+        "PYTHONHASHSEED": "0",
+        # The suite compares bytes, so the encoding cannot be left to the
+        # platform. Windows defaults the console to cp1252, which cannot encode
+        # most of what string_and_unicode.py prints, so the oracle itself died
+        # with UnicodeEncodeError and the case was unrunnable on that platform.
+        "PYTHONIOENCODING": "utf-8",
+        **(env or {}),
+    }
     # Absolute, because cwd is a scratch directory the case can write into and
     # a relative path would be resolved against that instead. When this was
     # relative, no case ever ran: every interpreter reported "can't open file"

@@ -21,8 +21,8 @@ jobs:
     name: Lint and types
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.14"
       - uses: astral-sh/setup-uv@v10.0.1
@@ -43,8 +43,8 @@ jobs:
         # tracks stable, but the suite has to keep working on the next one.
         python: ["3.12", "3.13", "3.14", "3.15-dev"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
@@ -59,10 +59,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [ubuntu-24.04, macos-26, windows-2025]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.14"
       - run: python -m pip install -e .
@@ -84,17 +84,17 @@ jobs:
             setup: "pypy3.11"
             oracle: "3.11"
           - runtime: graalpy
-            setup: "graalpy-24.2"
-            oracle: "3.11"
+            setup: "graalpy-25.3"
+            oracle: "3.13"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Install the oracle, CPython ${{ matrix.oracle }}
         id: oracle
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.oracle }}
       - name: Install ${{ matrix.runtime }}
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.setup }}
       - run: ${{ steps.oracle.outputs.python-path }} -m pip install -e .
@@ -108,7 +108,7 @@ jobs:
           --against ${{ matrix.runtime }}
           --oracle-python ${{ steps.oracle.outputs.python-path }}
           --out results/${{ matrix.runtime }}
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: results-${{ matrix.runtime }}
           path: results/${{ matrix.runtime }}

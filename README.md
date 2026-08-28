@@ -74,7 +74,7 @@ Measured on the same suite, so the bar is visible:
 | --- | --- |
 | CPython | 3.14 (stable), 3.15 (rc) |
 | PyPy | 7.3.23, targeting Python 3.11 |
-| GraalPy | 25.3 |
+| GraalPy | 25.3, targeting Python 3.13 |
 
 GraalPy is the compatibility standard to beat and the honest indication of how hard this is: after roughly a decade with Oracle behind it, some recent version of 93% of the 600 most-depended-on PyPI packages installs, and more than 65% of those packages' own tests pass.
 
