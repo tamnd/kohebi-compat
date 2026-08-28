@@ -108,6 +108,11 @@ jobs:
           kohebi-compat tokens corpus/local
           --kohebi .kohebi/target/release/kohebi
       - name: Trees, hand written corpus
+        # 3.12 is not asked. Its `ast.dump` prints optional empty lists that
+        # 3.13 leaves out, which is a change to the printer rather than to the
+        # tree, and kohebi implements the 3.13 one. The tokenizer comparison
+        # still runs on 3.12 because nothing about it changed.
+        if: matrix.python != '3.12'
         run: >
           kohebi-compat trees corpus/local
           --kohebi .kohebi/target/release/kohebi
@@ -124,7 +129,7 @@ jobs:
       - name: Trees, standard library of CPython ${{ matrix.python }}
         # Runs even when the tokens step failed. The two stages fail for
         # different reasons and seeing only the first one costs a round trip.
-        if: always()
+        if: always() && matrix.python != '3.12'
         run: >
           kohebi-compat trees
           --kohebi .kohebi/target/release/kohebi

@@ -43,6 +43,8 @@ $ kohebi-compat trees corpus/local --kohebi ../kohebi/target/release/kohebi
 
 The two frontend commands take the same arguments and report in the same shape, because they are the same comparison asked of a different stage. Everything below about oracles, outcomes, exclusions and corpora applies to both.
 
+`trees` needs a 3.13 or newer oracle and `tokens` runs on anything. `ast.dump` grew a `show_empty` argument in 3.13 and it defaults to false, so from 3.13 an optional empty list is left out of the dump and before 3.13 it is printed. That is a change to the printer rather than to the tree, kohebi implements the 3.13 one, and running against 3.12 anyway would report a couple of thousand mismatches that all say `keywords=[]`. So it refuses and says why instead.
+
 Each alternative runtime is compared against the CPython version it targets, not against current stable. PyPy 7.3.23 implements Python 3.11, so running it against a 3.14 oracle mostly measures three releases of error message rewording and says almost nothing about PyPy. `--oracle-python` names the oracle by path for exactly that reason, and because leaving it to `PATH` is how a suite ends up quietly comparing a runtime against itself.
 
 The exit code separates two things that look alike. A disagreement exits 1, and so does a run that could not happen at all, meaning the oracle itself failed, a case timed out, or the interpreter being measured is not installed. `--tolerate-mismatch` forgives the first and never the second, which is what the PyPy and GraalPy jobs use: their disagreements with CPython are the measurement, but a job that installed nothing and measured nothing has to stay red.

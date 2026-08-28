@@ -25,6 +25,7 @@ from kohebi_compat.trees import (
     compare_source,
     cpython_tree,
     first_difference,
+    oracle_is_usable,
     run,
 )
 
@@ -103,6 +104,40 @@ class TestTheOracle:
         verdict = cpython_tree(b"x = 1\x00\n")
         assert isinstance(verdict, Failure)
         assert verdict.kind == "SyntaxError"
+
+
+class TestTheOracleVersion:
+    """`ast.dump` grew `show_empty` in 3.13 and it defaults to false.
+
+    Before that an optional empty list was printed and after it is left out, so
+    an older oracle disagrees with us about every file containing a class or a
+    function and none of it is about the tree. Saying so once beats reporting
+    it two thousand times.
+    """
+
+    def test_the_running_interpreter_is_new_enough(self):
+        assert oracle_is_usable() is None
+
+    def test_313_and_later_are_accepted(self):
+        assert oracle_is_usable((3, 13)) is None
+        assert oracle_is_usable((3, 14)) is None
+        assert oracle_is_usable((4, 0)) is None
+
+    def test_312_is_refused_with_the_reason(self):
+        why = oracle_is_usable((3, 12))
+        assert why is not None
+        assert "3.12" in why
+        assert "ast.dump" in why
+        assert "Compare tokens instead" in why
+
+    def test_the_command_refuses_rather_than_reporting_thousands_of_bugs(self, monkeypatch):
+        from kohebi_compat import trees
+        from kohebi_compat.__main__ import main
+
+        monkeypatch.setattr(trees, "oracle_is_usable", lambda: "no good, and here is why")
+        with pytest.raises(SystemExit) as refused:
+            main(["trees"])
+        assert refused.value.code == 2
 
 
 class TestFirstDifference:

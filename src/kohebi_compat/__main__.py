@@ -69,6 +69,9 @@ def main(argv: list[str] | None = None) -> int:
             noun="tokenized",
         )
     if args.command == "trees":
+        unusable = trees.oracle_is_usable()
+        if unusable is not None:
+            parser.error(unusable)
         return _corpus(
             args,
             parser,

@@ -21,12 +21,21 @@ place, and the shape is the half that is easy to get right.
 For a file that does not parse the oracle is the same one the tokenizer
 differential uses, which is `compile`, because the message a user sees comes
 from the compiler.
+
+This one needs a 3.13 or newer oracle, which the tokenizer differential does
+not. `ast.dump` grew a `show_empty` argument in 3.13 and it defaults to false,
+so from 3.13 an optional empty list is left out of the dump and before 3.13 it
+is printed. That is a change to the printer rather than to the tree, it affects
+every file with a class or a function in it, and kohebi implements the 3.13
+printer. Running against 3.12 anyway would report a couple of thousand
+mismatches that all say `keywords=[]`, so `run` refuses instead.
 """
 
 from __future__ import annotations
 
 import ast
 import subprocess
+import sys
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,6 +48,26 @@ from kohebi_compat.corpus import (
     compiler_verdict,
     failure_from_report,
 )
+
+OLDEST_ORACLE = (3, 13)
+"""The oldest CPython whose `ast.dump` prints what kohebi prints."""
+
+
+def oracle_is_usable(version: tuple[int, ...] | None = None) -> str | None:
+    """Why this interpreter cannot be the oracle, or `None` if it can be."""
+    running = version or sys.version_info[:2]
+    if running >= OLDEST_ORACLE:
+        return None
+    wanted = ".".join(str(part) for part in OLDEST_ORACLE)
+    running_text = ".".join(str(part) for part in running)
+    return (
+        f"comparing trees needs a Python {wanted} or newer oracle and this is "
+        f"{running_text}. `ast.dump` only started leaving optional empty lists "
+        f"out of its output in {wanted}, so an older oracle disagrees with us "
+        "about every file that has a class or a function in it, and none of "
+        "that disagreement is about the tree. Compare tokens instead, which "
+        "works on any version."
+    )
 
 
 def kohebi_tree(source: bytes, *, kohebi: Sequence[str]) -> str | Failure:
