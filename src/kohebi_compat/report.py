@@ -16,7 +16,7 @@ import json
 import platform
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,7 +33,9 @@ class Summary:
     host: dict[str, str]
 
     def to_json(self) -> str:
-        return json.dumps(self.__dict__, indent=2, sort_keys=True) + "\n"
+        # asdict rather than __dict__: this is a slots dataclass, so there is
+        # no instance __dict__ to read.
+        return json.dumps(asdict(self), indent=2, sort_keys=True) + "\n"
 
 
 def summarise(results: list[Result]) -> Summary:

@@ -18,6 +18,7 @@ from kohebi_compat import (
     STRICT,
     Interpreter,
     Outcome,
+    Result,
     collect,
     compare,
     execute,
@@ -127,3 +128,27 @@ def test_the_shipped_suite_is_self_consistent():
     for case in cases:
         run = execute(CPYTHON, case, timeout_s=60)
         assert run.returncode == 0, f"{case.name} failed under the oracle:\n{run.stderr.decode()}"
+
+
+class TestReport:
+    def test_writing_a_report_produces_valid_json(self, tmp_path):
+        """The path CI takes and local runs do not.
+
+        This was a real bug. Summary is a slots dataclass, so reading
+        __dict__ raised AttributeError, and it only ran when --out was
+        passed, which no local run and no other test did.
+        """
+        import json
+
+        from kohebi_compat.report import summarise, write
+
+        results = [
+            Result(case="a.py", outcome=Outcome.MATCH),
+            Result(case="b.py", outcome=Outcome.MISMATCH, disagreed=["stdout"]),
+        ]
+        write(summarise(results), results, tmp_path)
+
+        data = json.loads((tmp_path / "summary.json").read_text())
+        assert data["total"] == 2
+        assert data["disagreements"]["stdout"] == 1
+        assert "b.py" in (tmp_path / "report.md").read_text()
