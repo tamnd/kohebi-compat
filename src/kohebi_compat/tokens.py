@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
 import sysconfig
 import tokenize
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
@@ -43,6 +44,9 @@ from pathlib import Path
 
 Tok = tuple[str, tuple[int, int], tuple[int, int], str]
 """One token as `(type, start, end, text)`, in `tokenize` module terms."""
+
+Guard = Callable[[tuple[int, ...]], bool]
+"""Whether an exclusion applies, given the version of the oracle."""
 
 
 class TokenOutcome(StrEnum):
@@ -58,7 +62,12 @@ class TokenOutcome(StrEnum):
     """Both refused it, and we did not say what CPython says."""
     EXCLUDED = "excluded"
     UNREADABLE = "unreadable"
-    """Not valid UTF-8, or gone from disk between listing and reading."""
+    """Gone from disk between the listing and the read.
+
+    A file that is not UTF-8 is not unreadable. It either declares what it is
+    and both sides decode it, or it declares nothing and both sides refuse it
+    with the same message.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +95,17 @@ class Failure:
     message: str
 
 
-def kohebi_tokens(source: str, *, kohebi: Sequence[str]) -> list[Tok] | Failure:
-    """Ask the kohebi binary to tokenize `source`."""
+def kohebi_tokens(source: bytes, *, kohebi: Sequence[str]) -> list[Tok] | Failure:
+    """Ask the kohebi binary to tokenize `source`.
+
+    Bytes rather than text, because deciding what encoding those bytes are in
+    is part of what is being compared. A file says so itself, in a comment on
+    its first or second line, and kohebi has to reach the same answer CPython
+    does before either of them has a token to show for it.
+    """
     proc = subprocess.run(
         [*kohebi, "tokenize", "--format", "json", "-"],
-        input=source.encode(),
+        input=source,
         capture_output=True,
         check=False,
     )
@@ -122,16 +137,25 @@ def _failure_from_report(report: str) -> Failure:
     return Failure(kind.strip(), message.strip())
 
 
-def cpython_tokens(source: str) -> list[Tok] | Failure:
+def cpython_tokens(source: bytes) -> list[Tok] | Failure:
     """Tokenize with CPython, falling back to `compile` for the message.
 
-    A file that `tokenize` rejects gets handed to `compile`, because the two
-    disagree about wording and the compiler's wording is the one users see and
-    the one kohebi reproduces. If `compile` somehow accepts it, the `tokenize`
-    error stands, since something has to be reported.
+    Decoding comes first and is its own way to fail. A file that declares an
+    encoding it does not have, or that is not UTF-8 and declares nothing, never
+    reaches a tokenizer at all, and what a user sees is the compiler's
+    complaint about the bytes.
+
+    A file that `tokenize` rejects gets handed to `compile` for the same
+    reason: the two disagree about wording and the compiler's wording is the
+    one users see and the one kohebi reproduces. If `compile` somehow accepts
+    it, the `tokenize` error stands, since something has to be reported.
     """
     try:
-        readline = io.StringIO(source).readline
+        text = decode(source)
+    except (SyntaxError, UnicodeDecodeError, LookupError) as exc:
+        return compiler_verdict(source) or Failure("SyntaxError", str(exc))
+    try:
+        readline = io.StringIO(text).readline
         return [
             (tokenize.tok_name[t.type], t.start, t.end, t.string)
             for t in tokenize.generate_tokens(readline)
@@ -140,7 +164,21 @@ def cpython_tokens(source: str) -> list[Tok] | Failure:
         return compiler_verdict(source) or Failure(type(exc).__name__, str(exc))
 
 
-def compiler_verdict(source: str) -> Failure | None:
+def decode(source: bytes) -> str:
+    """The text of a file, in whatever encoding it says it is in.
+
+    `detect_encoding` is a third oracle and it is not quite the one the
+    compiler uses, so a disagreement between them shows up as a decode that
+    fails here and a `compile` that succeeds, or the other way round. Over the
+    standard library they agree on every file. The byte order mark is dropped
+    rather than kept, because it is not part of the program and reading it as a
+    character makes the first token of every such file wrong.
+    """
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+    return source.decode(encoding)
+
+
+def compiler_verdict(source: bytes) -> Failure | None:
     """What `compile` says about this source, if it refuses it.
 
     The compiler is the second oracle and on error messages it is the one that
@@ -168,10 +206,10 @@ def compiler_verdict(source: str) -> Failure | None:
 
 def compare_source(source: str, *, kohebi: Sequence[str]) -> TokenResult:
     """Compare the two tokenizers on one piece of source text."""
-    return _compare(Path("<string>"), source, kohebi=kohebi)
+    return _compare(Path("<string>"), source.encode("utf-8"), kohebi=kohebi)
 
 
-def _compare(path: Path, source: str, *, kohebi: Sequence[str]) -> TokenResult:
+def _compare(path: Path, source: bytes, *, kohebi: Sequence[str]) -> TokenResult:
     ours = kohebi_tokens(source, kohebi=kohebi)
     theirs = cpython_tokens(source)
 
@@ -246,14 +284,10 @@ def _show(tok: Tok) -> str:
 
 def compare_file(path: Path, *, kohebi: Sequence[str]) -> TokenResult:
     try:
-        # utf-8-sig, not utf-8. A byte order mark is not part of the program,
-        # and CPython strips it while decoding the file. Reading it as a
-        # character instead makes the first token of every such file wrong for
-        # reasons that have nothing to do with either tokenizer.
-        source = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as exc:
-        # A corpus taken off a real machine has files that are not UTF-8 on
-        # purpose, because they are test data for the decoder.
+        source = path.read_bytes()
+    except OSError as exc:
+        # Gone from disk between the listing and the read, which happens on a
+        # machine that is doing anything else at the same time.
         return TokenResult(path, TokenOutcome.UNREADABLE, str(exc))
     return _compare(path, source, kohebi=kohebi)
 
@@ -283,35 +317,75 @@ class Exclusions:
     Format is one rule per line, `<glob>: <reason>`, matched against the path
     as written. Blank lines and lines starting with `#` are ignored.
 
+    A rule may carry a version guard, written `<glob> [python<3.14]: <reason>`,
+    and then it only applies when the oracle is that old. Python changes its own
+    error messages between releases, and kohebi reproduces one release, so a
+    file that matches on 3.14 and not on 3.13 is a fact about CPython rather
+    than about kohebi. Without the guard the choice would be to drop the file
+    everywhere or to compare against only one version, and both of those are
+    worse. `<` and `>=` are the two comparisons, which is enough to say "before
+    this release" and "from this release on".
+
     The reason is not decoration. An exclusion saying "we do not support this
     yet" is fine and an exclusion with no reason is how a compatibility number
     stops meaning anything, so the parser refuses a rule without one.
     """
 
-    def __init__(self, rules: Sequence[tuple[str, str]] = ()) -> None:
-        self.rules = list(rules)
+    def __init__(
+        self,
+        rules: Sequence[tuple[str, str]] = (),
+        *,
+        version: tuple[int, ...] | None = None,
+    ) -> None:
+        self.rules: list[tuple[str, str, Guard | None]] = [
+            (glob, reason, None) for glob, reason in rules
+        ]
+        self.version = version or sys.version_info[:2]
 
     @classmethod
-    def load(cls, path: Path | None) -> Exclusions:
+    def load(cls, path: Path | None, *, version: tuple[int, ...] | None = None) -> Exclusions:
+        loaded = cls(version=version)
         if path is None or not path.exists():
-            return cls()
-        rules = []
+            return loaded
         for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            glob, sep, reason = line.partition(":")
+            head, sep, reason = line.partition(":")
             if not sep or not reason.strip():
                 raise ValueError(f"{path}:{number}: exclusion has no reason: {line!r}")
-            rules.append((glob.strip(), reason.strip()))
-        return cls(rules)
+            try:
+                glob, guard = _split_guard(head.strip())
+            except ValueError as exc:
+                raise ValueError(f"{path}:{number}: {exc}") from exc
+            loaded.rules.append((glob, reason.strip(), guard))
+        return loaded
 
     def reason_for(self, path: Path) -> str | None:
         text = path.as_posix()
-        for glob, reason in self.rules:
-            if fnmatch(text, glob) or fnmatch(path.name, glob):
-                return reason
+        for glob, reason, guard in self.rules:
+            if not (fnmatch(text, glob) or fnmatch(path.name, glob)):
+                continue
+            if guard is not None and not guard(self.version):
+                continue
+            return reason
         return None
+
+
+_GUARD = re.compile(r"^(?P<glob>.*?)\s*\[python\s*(?P<op><|>=)\s*(?P<version>\d+(?:\.\d+)*)\]$")
+
+
+def _split_guard(head: str) -> tuple[str, Guard | None]:
+    """Pull an optional `[python<3.14]` off the end of a rule's glob."""
+    if not head.endswith("]"):
+        return head, None
+    found = _GUARD.match(head)
+    if found is None:
+        raise ValueError(f"exclusion has a guard it cannot read: {head!r}")
+    wanted = tuple(int(part) for part in found["version"].split("."))
+    if found["op"] == "<":
+        return found["glob"], lambda running: running < wanted
+    return found["glob"], lambda running: running >= wanted
 
 
 def default_corpus(python: str | None = None) -> Path:
