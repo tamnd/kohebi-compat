@@ -1,0 +1,109 @@
+name: Compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly, so that a CPython point release breaking us shows up within a day.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and types
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv pip install --system -e '.[dev]'
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+
+  harness:
+    name: Harness tests, Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.14 is current stable; 3.15 is in release candidate. The oracle
+        # tracks stable, but the suite has to keep working on the next one.
+        python: ["3.12", "3.13", "3.14", "3.15-dev"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m pytest tests -q
+
+  # The suite must pass when CPython is compared against itself. If this ever
+  # fails, the harness is non-deterministic and every other result is suspect.
+  self-consistency:
+    name: Oracle self-consistency
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m pip install -e .
+      - run: kohebi-compat suites --against cpython
+
+  alternatives:
+    name: ${{ matrix.runtime }}
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: pypy
+            setup: "pypy3.11"
+          - runtime: graalpy
+            setup: "graalpy-24.2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install ${{ matrix.runtime }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.setup }}
+      - run: python3.14 -m pip install -e . || python -m pip install -e .
+      - name: Compare ${{ matrix.runtime }} against the oracle
+        run: kohebi-compat suites --against ${{ matrix.runtime }} --out results/${{ matrix.runtime }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ matrix.runtime }}
+          path: results/${{ matrix.runtime }}
+          if-no-files-found: warn
+
+  compat-ok:
+    name: Compatibility
+    if: always()
+    needs: [lint, harness, self-consistency]
+    runs-on: ubuntu-24.04
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "All required checks passed."
