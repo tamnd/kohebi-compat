@@ -83,9 +83,16 @@ jobs:
           - runtime: pypy
             setup: "pypy3.11"
             oracle: "3.11"
+          # 25.2 rather than the current 25.3. GraalPy tagged that release
+          # graal-25.3.4.1, and setup-python parses the tag into a version and
+          # asks semver whether it satisfies the request. A four component
+          # version is not valid semver, so nothing matches and the job fails
+          # with "GraalPy version 25.3 with arch x64 not found". 25.2.4 is the
+          # newest release setup-python can actually resolve, and it targets
+          # Python 3.12.
           - runtime: graalpy
-            setup: "graalpy-25.3"
-            oracle: "3.13"
+            setup: "graalpy-25.2"
+            oracle: "3.12"
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Install the oracle, CPython ${{ matrix.oracle }}
