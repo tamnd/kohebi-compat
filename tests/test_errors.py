@@ -13,12 +13,19 @@ would go on passing forever while checking nothing.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
 from kohebi_compat.corpus import Exclusions, FileOutcome
-from kohebi_compat.errors import compare_file, cpython_report, first_difference, run
+from kohebi_compat.errors import (
+    compare_file,
+    cpython_report,
+    first_difference,
+    kohebi_report,
+    run,
+)
 
 BROKEN = Path("corpus/broken")
 
@@ -189,3 +196,17 @@ class TestTheBrokenCorpus:
         tests the same thing and reads worse when it is the one that failed."""
         too_big = [p for p in CASES if len(p.read_bytes()) > 200]
         assert not too_big
+
+
+def test_a_bad_command_line_is_not_a_compatibility_difference(tmp_path):
+    """Being told the flag does not exist is not a disagreement about the file.
+
+    Reading it as one turns a one word mistake in the command line into a
+    thousand failures with the real reason buried among them, which is exactly
+    what happened the first time `--compile` was passed to a kohebi that did
+    not have it yet.
+    """
+    good = tmp_path / "fine.py"
+    good.write_text("x = 1\n")
+    with pytest.raises(RuntimeError, match="rejected the command line"):
+        kohebi_report(good, kohebi=[sys.executable, "-c", "raise SystemExit(2)"])
