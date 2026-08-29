@@ -1,9 +1,6 @@
-CHUNK = 4096
-
-
 def read_all(handle):
     while True:
-        block = handle.read(CHUNK)
+        block = handle.read(4096)
         if not block:
             break
         yield block
