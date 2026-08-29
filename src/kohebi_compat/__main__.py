@@ -1,29 +1,36 @@
 """`kohebi-compat` command line entry point.
 
-Four subcommands, because a runtime that cannot run a program yet still has
+Five subcommands, because a runtime that cannot run a program yet still has
 parts worth checking:
 
     kohebi-compat run      whole programs, compared by what they print
     kohebi-compat tokens   token streams, compared against CPython's tokenizer
     kohebi-compat trees    syntax trees, compared against CPython's `ast.dump`
     kohebi-compat errors   refusals, compared as the block a user is shown
+    kohebi-compat mutants  the same, over real files broken on purpose
 
-`run` is the end goal. The other three are what tell us today whether the
+`run` is the end goal. The other four are what tell us today whether the
 frontend is right. `tokens` and `trees` work over a corpus far larger than
 anything we would write by hand, and `errors` cannot, because a standard
 library is by definition a few thousand files that parse. They take the same
 arguments and differ in which stage they ask both sides about and, for
 `errors`, in which corpus they reach for when nobody names one.
+
+`mutants` is `errors` over a corpus it builds first, by breaking one line of a
+real module a thousand times. It is the only one of the five that is expected
+to disagree with CPython, so it is gated on a floor rather than on finding
+nothing, and the floor is what stops the number sliding backwards.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from . import errors, report, tokens, trees
+from . import errors, mutate, report, tokens, trees
 from .corpus import Exclusions, FileOutcome, FileResult, default_corpus, find_kohebi
 from .normalize import LENIENT, STRICT
 from .runner import (
@@ -74,7 +81,12 @@ def main(argv: list[str] | None = None) -> int:
             "every file in one parses."
         ),
     )
+    _add_mutants(
+        sub.add_parser("mutants", help="Compare refusals over real files broken on purpose.")
+    )
     args = parser.parse_args(argv)
+    if args.command == "mutants":
+        return _mutants(args, parser)
     if args.command == "tokens":
         return _corpus(
             args,
@@ -224,6 +236,62 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 0 if all(r.passed for r in results) else 1
 
 
+def _add_mutants(parser: argparse.ArgumentParser) -> None:
+    """`errors` over a corpus this builds, so it takes the same flags and more.
+
+    `--into` exists so a failure can be reproduced. Without it the corpus goes
+    to a temporary directory and is gone by the time anyone reads the log,
+    which is fine for the number and useless for the file that produced it.
+    """
+    _add_corpus(
+        parser,
+        stage="refuse",
+        stem="mutants",
+        default_corpus_help=(
+            "Modules to break. Defaults to the standard library of the oracle "
+            "interpreter, which is real code somebody wrote for a reason."
+        ),
+    )
+    parser.add_argument("--count", type=int, default=1200, metavar="N", help="How many to make.")
+    parser.add_argument("--seed", type=int, default=11, metavar="N", help="Fixed, so runs compare.")
+    parser.add_argument(
+        "--into",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Keep the generated corpus here instead of throwing it away.",
+    )
+
+
+def _mutants(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    root = (args.corpus or [default_corpus(args.oracle_python)])[0]
+    with tempfile.TemporaryDirectory(prefix="kohebi-mutants-") as scratch:
+        into = args.into or Path(scratch)
+        made = mutate.generate(root, count=args.count, seed=args.seed)
+        if not made:
+            parser.error(f"nothing under {root} could be broken into a file CPython refuses")
+        mutate.write(made, into)
+        print(
+            f"generated {len(made)} mutants from {root} with seed {args.seed} into {into}",
+            file=sys.stderr,
+        )
+        # The generated files become the corpus, and everything from here is
+        # the ordinary errors comparison over them.
+        args.corpus = [into]
+        return _corpus(
+            args,
+            parser,
+            differential=errors.run,
+            title="Error report agreement over broken real files",
+            stem="mutants",
+            noun="refused",
+            # Every one of these is expected to disagree sometimes, which is
+            # the whole point of measuring rather than asserting. The floor is
+            # the gate.
+            tolerate_mismatch=True,
+        )
+
+
 def _add_corpus(
     parser: argparse.ArgumentParser,
     *,
@@ -309,6 +377,7 @@ def _corpus(
     stem: str,
     noun: str,
     default_roots: list[Path] | None = None,
+    tolerate_mismatch: bool = False,
 ) -> int:
     kohebi = find_kohebi(args.kohebi)
     if kohebi is None:
@@ -357,7 +426,8 @@ def _corpus(
     wrong = [r for r in results if not r.passed]
     if wrong:
         print(f"{len(wrong)} file(s) {noun} differently from CPython", file=sys.stderr)
-        return 1
+        if not tolerate_mismatch:
+            return 1
     if args.min_agreement is not None and summary.agreement < args.min_agreement:
         print(
             f"agreement {summary.agreement:.2%} is below the floor of {args.min_agreement:.2%}",

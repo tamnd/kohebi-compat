@@ -150,12 +150,29 @@ jobs:
           --kohebi .kohebi/target/release/kohebi
           --out results/errors-${{ matrix.python }}
           --min-agreement 1.0
+      - name: Errors, real modules broken one line at a time
+        # The hand written corpus above measures the cases someone thought of.
+        # This one breaks a thousand real standard library modules and measures
+        # what falls out, which is where the errors nobody would have written a
+        # case for turn up. It is expected to disagree, so the floor is the gate
+        # rather than a clean run, and the floor is deliberately below the
+        # number we get: a different 3.14 point release ships slightly different
+        # modules, so the corpus is not identical from one month to the next.
+        # 3.14 only, for the same reason as the step above.
+        if: always() && matrix.python == '3.14'
+        run: >
+          kohebi-compat mutants
+          --kohebi .kohebi/target/release/kohebi
+          --out results/mutants-${{ matrix.python }}
+          --min-agreement 0.88
+          --quiet
       - name: Summarise
         if: always()
         run: |
           cat results/tokens-${{ matrix.python }}/tokens.md >> "$GITHUB_STEP_SUMMARY" || true
           cat results/trees-${{ matrix.python }}/trees.md >> "$GITHUB_STEP_SUMMARY" || true
           cat results/errors-${{ matrix.python }}/errors.md >> "$GITHUB_STEP_SUMMARY" || true
+          cat results/mutants-${{ matrix.python }}/mutants.md >> "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
