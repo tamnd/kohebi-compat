@@ -45,9 +45,16 @@ def kohebi_report(path: Path, *, kohebi: Sequence[str]) -> str | None:
     The file is passed by name rather than on standard input, so that the name
     kohebi prints is the name CPython is given and the first line of the two
     blocks is comparable.
+
+    `--compile` because the oracle below is `compile` and not `ast.parse`, and
+    the two do not refuse the same files. `ast.parse` stops as soon as it has a
+    tree, so it is perfectly happy with `f(a=1, a=2)`, and `compile` runs two
+    more passes over that tree and throws it out. Without the flag every file
+    in that family reads as a difference when it is only a difference in what
+    was asked. The tree differential wants the other one and keeps using it.
     """
     proc = subprocess.run(
-        [*kohebi, "ast", str(path)],
+        [*kohebi, "ast", "--compile", str(path)],
         capture_output=True,
         stdin=subprocess.DEVNULL,
         check=False,
