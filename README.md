@@ -22,9 +22,9 @@ kohebi build        AOT mode
 
 Two-way disagreements are informative in themselves. CPython and `kohebi run` agreeing while `kohebi build` differs means the AOT compiler is wrong. Both kohebi modes agreeing against CPython means the shared frontend is wrong. That distinction saves a lot of debugging, and it is the mechanism that enforces the claim that the two modes do not drift apart.
 
-## Four commands
+## Five commands
 
-`kohebi-compat run` is the end goal. `kohebi-compat tokens`, `kohebi-compat trees` and `kohebi-compat errors` are what is useful today.
+`kohebi-compat run` is the end goal. `kohebi-compat tokens`, `kohebi-compat trees`, `kohebi-compat errors` and `kohebi-compat mutants` are what is useful today.
 
 Running whole programs only says something once there is a runtime to run them. There will not be one for a while, and waiting until then means finding out about a frontend bug months after writing it. So the frontend gets compared a stage at a time, against the piece of CPython that does the same job: the lexer against the `tokenize` module, the parser against `ast.dump`, and the refusals against the block `traceback` prints.
 
@@ -40,9 +40,10 @@ $ kohebi-compat tokens --kohebi ../kohebi/target/release/kohebi
 $ kohebi-compat trees --kohebi ../kohebi/target/release/kohebi
 $ kohebi-compat trees corpus/local --kohebi ../kohebi/target/release/kohebi
 $ kohebi-compat errors --kohebi ../kohebi/target/release/kohebi
+$ kohebi-compat mutants --kohebi ../kohebi/target/release/kohebi
 ```
 
-The three frontend commands take the same arguments and report in the same shape, because they are the same comparison asked of a different stage. Everything below about oracles, outcomes, exclusions and corpora applies to all of them. Only the corpus they fall back on differs: `tokens` and `trees` default to the oracle's standard library and `errors` defaults to `corpus/broken`, for the reason in the next section.
+The four frontend commands take the same arguments and report in the same shape, because they are the same comparison asked of a different stage. Everything below about oracles, outcomes, exclusions and corpora applies to all of them. Only the corpus they fall back on differs: `tokens` and `trees` default to the oracle's standard library, `errors` defaults to `corpus/broken`, and `mutants` builds its own out of that standard library, all for the reasons in the next two sections.
 
 `trees` needs a 3.13 or newer oracle and `tokens` runs on anything. `ast.dump` grew a `show_empty` argument in 3.13 and it defaults to false, so from 3.13 an optional empty list is left out of the dump and before 3.13 it is printed. That is a change to the printer rather than to the tree, kohebi implements the 3.13 one, and running against 3.12 anyway would report a couple of thousand mismatches that all say `keywords=[]`. So it refuses and says why instead.
 
@@ -98,6 +99,16 @@ What is compared is the whole block a person sees: the `File` line, the source l
 Nothing is stored as an expected answer. CPython is asked at the time the comparison runs, so adding a case is adding a file to `corpus/broken/`, and a message CPython rewords in a future release shows up as a difference rather than as a fixture nobody updated. Both sides are given the same filename, the path as written on the command line, because the filename is the first line of the block and a comparison that had to paper over it would be papering over the beginning.
 
 In CI this runs on 3.14 only, and unlike the other two steps that is not because the corpus differs. It is the same corpus on every version. This compares wording character for character, kohebi reproduces one release's wording, and CPython rewords its own errors between releases, so running it against 3.13 would measure that release's notes rather than anything here.
+
+## Breaking real files on purpose
+
+`corpus/broken/` is written by hand, which is what makes it good at the cases somebody thought of and useless at the ones nobody did. Every file in it is short, deliberate, and wrong in exactly one way. Real broken Python is not like that. It is a two hundred line module with a missing comma four hundred columns in, and the interesting question about it is often not what the message says but which of several things wrong with the file gets reported at all.
+
+`kohebi-compat mutants` builds the other kind of corpus and then runs the same comparison over it. It takes a module out of the oracle's standard library, breaks one line of it, keeps the result if CPython refuses it, and repeats with a fixed seed until it has a thousand of them. The five edits are deliberately dull: delete a token, duplicate a token, swap two neighbouring tokens, delete a character, insert an operator. Nothing is trying to be strange, because this is not a test of how odd an input can be. It is a sample of what breaking real code looks like.
+
+It earned its place the first time it ran. kohebi agreed with CPython on 55% of the blocks, and the largest single bucket was not a message that had been worded wrong. It was the rule deciding which of two errors to print when a file is wrong in two places, which no hand written case had caught, because a hand written case is only ever wrong in one place. It is at 91% now and each of the fixes since has been aimed by this number.
+
+This is the one differential expected to disagree, so it is gated on `--min-agreement` rather than on finding nothing, and the floor in CI is set below the current number on purpose. The corpus comes out of a standard library that is not byte for byte the same between point releases, so a run a month from now is a slightly different thousand files. `--into` keeps the generated corpus somewhere instead of throwing it away, which is what you want the moment a difference is worth opening.
 
 ## What is normalised, and what is not
 
