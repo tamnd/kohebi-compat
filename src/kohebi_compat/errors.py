@@ -38,6 +38,10 @@ from pathlib import Path
 
 from kohebi_compat.corpus import Exclusions, FileOutcome, FileResult
 
+# What clap exits with when it will not accept the arguments at all. A file
+# kohebi refuses is 1, so the two never get confused.
+USAGE_ERROR = 2
+
 
 def kohebi_report(path: Path, *, kohebi: Sequence[str]) -> str | None:
     """The block kohebi prints for this file, or `None` if it accepts it.
@@ -45,15 +49,35 @@ def kohebi_report(path: Path, *, kohebi: Sequence[str]) -> str | None:
     The file is passed by name rather than on standard input, so that the name
     kohebi prints is the name CPython is given and the first line of the two
     blocks is comparable.
+
+    `--compile` because the oracle below is `compile` and not `ast.parse`, and
+    the two do not refuse the same files. `ast.parse` stops as soon as it has a
+    tree, so it is perfectly happy with `f(a=1, a=2)`, and `compile` runs two
+    more passes over that tree and throws it out. Without the flag every file
+    in that family reads as a difference when it is only a difference in what
+    was asked. The tree differential wants the other one and keeps using it.
+
+    # Raises
+
+    `RuntimeError` if kohebi rejects the command line rather than the file.
     """
     proc = subprocess.run(
-        [*kohebi, "ast", str(path)],
+        [*kohebi, "ast", "--compile", str(path)],
         capture_output=True,
         stdin=subprocess.DEVNULL,
         check=False,
     )
     if proc.returncode == 0:
         return None
+    if proc.returncode == USAGE_ERROR:
+        # Being told the flag does not exist is not a disagreement about the
+        # file, and reading it as one turns a one word mistake in the command
+        # line into a thousand compatibility failures with the real reason
+        # buried in the middle of them. Refusing to start says it once.
+        raise RuntimeError(
+            f"kohebi rejected the command line rather than the file: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}"
+        )
     return proc.stderr.decode("utf-8", "replace").strip("\n")
 
 
