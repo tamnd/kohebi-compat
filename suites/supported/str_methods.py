@@ -146,8 +146,12 @@ print(caught(lambda: "abc".removeprefix()), caught(lambda: "abc".removeprefix("a
 print(caught(lambda: "abc".removeprefix(x=1)))
 
 # `splitlines` takes the truth of its argument rather than a number, so a
-# string counts as asking to keep the ends.
-print("a\nb".splitlines("x"), "a\nb".splitlines(2), "a\nb".splitlines(None))
+# string counts as asking to keep the ends. That is 3.12 and later, and before
+# it the argument had to be an integer, so two of these three are the version's
+# answer rather than a fixed one. Both answers are right and the comparison is
+# always same to same.
+print(caught(lambda: "a\nb".splitlines("x")), "a\nb".splitlines(2))
+print(caught(lambda: "a\nb".splitlines(None)))
 
 # A name a string has not got is an `AttributeError`. A name it has that a
 # runtime has not written yet is a different answer again, but that one cannot
