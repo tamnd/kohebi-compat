@@ -31,6 +31,7 @@ Running whole programs only says something once there is a runtime to run them. 
 ```console
 $ pip install -e '.[dev]'
 $ kohebi-compat run suites
+$ kohebi-compat run suites/supported --against kohebi-run
 $ kohebi-compat run suites --against pypy --against graalpy
 $ kohebi-compat run suites --out results/local
 ```
@@ -122,8 +123,11 @@ Notably **not** normalised: error message text. Message wording is a compatibili
 | --- | --- |
 | `suites/language/` | Descriptors, MRO and metaclasses, generators and `finally`, exception groups, frame introspection and `sys.settrace`, `exec`/`eval`/monkeypatching |
 | `suites/stdlib/` | Integer and float edges, string and Unicode behaviour across scripts |
+| `suites/supported/` | The programs kohebi can already run, held to matching CPython exactly |
 
-These are the places runtimes reliably diverge. They are chosen to be hostile to exactly the optimisations kohebi intends to make: caching attribute lookups, assuming classes do not change, and assuming frames are not observable.
+The first two are the places runtimes reliably diverge. They are chosen to be hostile to exactly the optimisations kohebi intends to make: caching attribute lookups, assuming classes do not change, and assuming frames are not observable. None of them runs today, which is the point of having written them: the answer is written down before the runtime reaches the question.
+
+`suites/supported/` is the other half, and it is the one that has a floor. Every program in it uses only what kohebi implements, so a disagreement there is a regression rather than a gap, and CI fails on one. It grows by a file per feature as the runtime grows, which keeps the two directories moving in opposite directions: a case leaves the hostile side of the line as the answer stops being aspirational.
 
 The suite grows in three further directions, none of which exist yet:
 
