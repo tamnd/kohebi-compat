@@ -180,6 +180,56 @@ jobs:
           path: results/
           if-no-files-found: warn
 
+  # What kohebi can already do, held to matching CPython exactly.
+  #
+  # Everything else under suites/ is written to be hostile and none of it runs
+  # yet, which is the point of having it: the answer is written down before the
+  # runtime reaches the question. This job is the other half. Every program in
+  # suites/supported/ uses only what kohebi implements, so a disagreement is a
+  # regression rather than a gap and every case has to match.
+  supported:
+    name: Supported programs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: tamnd/kohebi
+          path: .kohebi
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: .kohebi
+      - run: cargo build --release --locked --bin kohebi
+        working-directory: .kohebi
+      - run: python -m pip install -e .
+      - name: Put kohebi on PATH
+        run: echo "$GITHUB_WORKSPACE/.kohebi/target/release" >> "$GITHUB_PATH"
+      - name: Compare kohebi run against the oracle
+        # No --tolerate-mismatch and no floor to set, because `run` fails on
+        # any disagreement already and that is the floor this job wants.
+        #
+        # kohebi-build is not asked for yet. `kohebi build --run` does not
+        # exist, so every case would report a failure to launch rather than a
+        # disagreement, and a job that is red for a reason nobody is fixing
+        # this week is a job people learn to ignore.
+        run: >
+          kohebi-compat run suites/supported
+          --against kohebi-run
+          --out results/supported
+      - name: Summarise
+        if: always()
+        run: cat results/supported/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: results-supported
+          path: results/supported
+          if-no-files-found: warn
+
   # PyPy and GraalPy disagree with CPython on purpose, so this job passes
   # --tolerate-mismatch and records the rate instead of failing on it. What it
   # does still fail on is a run that never happened, meaning the runtime did
@@ -244,7 +294,7 @@ jobs:
   compat-ok:
     name: Compatibility
     if: always()
-    needs: [lint, harness, self-consistency, frontend]
+    needs: [lint, harness, self-consistency, frontend, supported]
     runs-on: ubuntu-24.04
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
