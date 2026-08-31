@@ -161,3 +161,21 @@ try:
     Point.nothing
 except AttributeError:
     print("no such attribute on a class")
+
+
+# A bound method is built by the lookup, so no two of them are the same object,
+# and two that wrap the same function and the same instance are equal anyway.
+class Counter:
+    """A class with one method, for the lookups below to find."""
+
+    def step(self):
+        """The method, which does not matter, only that it is one."""
+        return 1
+
+
+one = Counter()
+two = Counter()
+print(one.step is one.step, one.step == one.step)
+print(one.step == two.step, two.step == two.step)
+held = one.step
+print(held is held, held == one.step, held() + two.step())
