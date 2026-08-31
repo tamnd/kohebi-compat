@@ -149,6 +149,14 @@ def execute(
         # most of what string_and_unicode.py prints, so the oracle itself died
         # with UnicodeEncodeError and the case was unrunnable on that platform.
         "PYTHONIOENCODING": "utf-8",
+        # A case that imports a helper beside it makes CPython write a
+        # `__pycache__` into the suite directory, which is the repository. The
+        # directory is ignored by git, so nothing would ever have been
+        # committed, but a cached module is also one a later run can read
+        # instead of the file next to it, and a suite whose second run does
+        # less work than its first is a suite that can pass for the wrong
+        # reason.
+        "PYTHONDONTWRITEBYTECODE": "1",
         **(env or {}),
     }
     # Absolute, because cwd is a scratch directory the case can write into and
