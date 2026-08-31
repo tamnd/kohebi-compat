@@ -92,7 +92,10 @@ print("abc".partition("bc"), "".partition("a"))
 print("aaa".replace("a", "b"), "aaa".replace("a", "b", 2), "aaa".replace("aa", "b"))
 print("abc".replace("", "-"), "abc".replace("", "-", 2), repr("".replace("", "x")))
 print("abc".replace("z", "y"), "abc".replace("a", "b", -1), "abc".replace("a", "b", 0))
-print("abc".replace("a", "b", count=1))
+# `count` only became a keyword in 3.13, and this suite is run against every
+# version from 3.12, so the answer here is the version's rather than a fixed
+# one. Both answers are right, and the comparison is always same to same.
+print(caught(lambda: "abc".replace("a", "b", count=1)))
 
 # `splitlines` breaks on eleven things and not just on a newline, counts a
 # carriage return and newline together as one, and never ends with an empty
